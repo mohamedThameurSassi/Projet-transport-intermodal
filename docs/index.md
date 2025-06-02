@@ -1,8 +1,11 @@
+
+
+
 # Projet IFT3150: Nom du projet
 
-> **Thèmes**: Science de données, Génie logiciel  
-> **Superviseur**: Nom du supervisuer  
-> **Collaborateurs:** Nom de(s) collaborateur(s) et partenaire(s)
+> **Thèmes**: Génie logiciel, recherche opérationnelle   
+> **Superviseur**: Édouard Lafontant
+> **Collaborateurs:** Mohamed Thameur Sassi
 
 ## Informations importantes
 
@@ -14,17 +17,19 @@
 
 ## Équipe
 
-- Alice Dupont: Responsable de...
-- Bob Tremblay: Responsable de...
+- Mohamed Thameur Sassi: Développeur principal
+- Mohamed Thameur Sassi: Manager
+- Mohamed Thameur Sassi: CEO
 
 ## Description du projet
+Un outil de prévision de trajet multimodal dans la ville de Montréal
 
 ### Contexte
 
 ### Problématique ou motivations
-
+La ville de Montréal, nous avons accès à plusieurs type de transport différents. En particulier si on prend en compte les différents service de transport autour de la métropole (STM,ARTM,REM et BIXI) Cependant, les services sont très concentrés dans une partie de la ville et les arrondissements comme Montréal-Nord, Anjou et Rivière-des-Prairies sont pris à dépendre d'un réseau d'autobus peu performant. Pour les habitants de ces arrondissements, il est souvent plus pratique de prendre le vélo ou la voiture pour se rendre à un métro cependant il n'existe pas de solution permettant de calculer de tels itinéraires
 ### Proposition et objectifs
-
+Pour répondre à cette problématique, je vais construire une application mobile permettant de calculer des itinéraires avec des transports multimodaux. Elle aura poir objectif de diminuer la dépendance aux voitures, diminuer l'emprunte carbonne et faciliter les transports à l'aide des transports en commun de Montréal
 
 ## Échéancier
 
@@ -46,3 +51,4 @@
 | Tests                          | 11-31 juillet | Plan + Résultats intermédiaires     | ⏳ À venir  |
 | Évaluation finale              | 8 août        | Analyse des résultats + Discussion  | ⏳ À venir  |
 | Présentation + Rapport         | 15 août       | Présentation + Rapport              | ⏳ À venir  |
+
