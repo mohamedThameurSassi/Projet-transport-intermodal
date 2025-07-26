@@ -172,3 +172,19 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# VS Code settings
+.vscode/
+Server/.idea
+Server/graph_generator/cache
+
+ProjetMultimodal/.DS_Store
+ProjetMultimodal/Info.plist
+ProjetMultimodal/MultiTravel/.DS_Store
+Server/.DS_Store
+Server/data/.DS_Store
+Server/graphs_generator/.DS_Store
+Server/graphs_generator/cache/5da30a81e9711a150312d94777732f22c252e800.json
+Server/graphs_generator/cache/799cdf37907c19d8d27bc992500ac2397e37beb3.json
+Server/graphs_generator/cache/502d283628bfe0b3ece1136a41c16730a297af65.json
+Server/graphs_generator/cache/f2e6a320ee0e7c0f3e5f01f625f39507b14af2c1.json
