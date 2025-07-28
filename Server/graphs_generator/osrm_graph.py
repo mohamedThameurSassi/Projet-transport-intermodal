@@ -8,7 +8,7 @@ from itertools import combinations
 
 # -------------------- CONFIG --------------------
 PLACE_NAME = "Montreal, Quebec, Canada"
-OUTPUT_DIR = "../graphs"
+OUTPUT_DIR = "../data/graphs"
 MODES = {
     "car": "drive",
     "bike": "bike",
