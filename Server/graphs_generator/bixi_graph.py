@@ -4,9 +4,18 @@ import json
 from networkx.readwrite import json_graph
 import datetime
 import os
-
+MONTREAL_BBOX = {
+    "north": 45.72,
+    "south": 45.41,
+    "east": -73.47,
+    "west": -73.97
+}
 OUTPUT_PATH = "../data/graphs/bixi_graph.json"
 GBFS_URL = "https://gbfs.velobixi.com/gbfs/en/station_information.json"
+
+def is_within_montreal(lat, lon):
+    return (MONTREAL_BBOX["south"] <= lat <= MONTREAL_BBOX["north"] and
+            MONTREAL_BBOX["west"] <= lon <= MONTREAL_BBOX["east"])
 
 def build_bixi_graph():
     print("🔄 Fetching BIXI station data...")
@@ -18,10 +27,12 @@ def build_bixi_graph():
 
     if not stations:
         raise ValueError("❌ No BIXI stations found — check GBFS feed")
-
+    filtered_stations = [s for s in stations if is_within_montreal(s['lat'], s['lon'])]
+    print(f"🔍 Original stations: {len(stations)} → After filtering: {len(filtered_stations)}")
+    
     G = nx.Graph()
 
-    for station in stations:
+    for station in filtered_stations:
         G.add_node(
             f"bixi_{station['station_id']}",
             x=station['lon'],

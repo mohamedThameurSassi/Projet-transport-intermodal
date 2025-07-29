@@ -8,4 +8,5 @@ const (
 	Car           TransportMode = "car"
 	PublicTransit TransportMode = "public_transport"
 	Walking       TransportMode = "walking"
+	Unknown       TransportMode = "unknown"
 )

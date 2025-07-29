@@ -5,6 +5,7 @@ from networkx.readwrite import json_graph
 import json
 import datetime
 from itertools import combinations
+from traffic_data import TrafficDataProcessor
 
 # -------------------- CONFIG --------------------
 PLACE_NAME = "Montreal, Quebec, Canada"
@@ -23,9 +24,9 @@ def ensure_dir(path):
 def save_graph_json(graph, filename, mode_info=None):
     data = json_graph.node_link_data(graph)
     for link in data["links"]:
-        if "geometry" in link:
+        if "geometry" in link and hasattr(link["geometry"], "coords"):
             link["geometry"] = list(link["geometry"].coords)
-    
+
     metadata = {
         "generated_at": datetime.datetime.now().isoformat(),
         "place": PLACE_NAME,
@@ -43,6 +44,13 @@ def save_graph_json(graph, filename, mode_info=None):
         json.dump(output_data, f, indent=2)
     print(f"✅ Saved: {filename} ({metadata['node_count']} nodes, {metadata['edge_count']} edges)")
 
+    with open(f"{OUTPUT_DIR}/car_graph.json") as f:
+        car_graph_data = json.load(f)
+        sample_links = car_graph_data['graph']['links'][:5]
+        for i, link in enumerate(sample_links):
+            print(f"Link {i}: travel_time = {link.get('travel_time')}, multiplier = {link.get('traffic_multiplier')}")
+
+
 def create_index_file():
     import datetime
     
@@ -56,7 +64,6 @@ def create_index_file():
             "description": f"Graph for {mode} transportation"
         })
     
-    # Combinations
     for combo in combinations(MODES.keys(), 2):
         mode_name = "_".join(combo)
         graph_files.append({
@@ -66,7 +73,6 @@ def create_index_file():
             "description": f"Combined graph for {' and '.join(combo)} transportation"
         })
     
-    # All modes
     graph_files.append({
         "filename": "car_bike_walk_graph.json",
         "type": "all_modes",
@@ -94,15 +100,24 @@ def main():
 
     graphs = {}
 
+    traffic_processor = TrafficDataProcessor()
+    traffic_processor.download_traffic_data()
+    traffic_processor.process_traffic_data()
+
     for mode, net_type in MODES.items():
         print(f"📥 Downloading '{mode}' graph...")
         graph = ox.graph_from_place(PLACE_NAME, network_type=net_type)
+        if mode == "car":
+            print("🚗 Applying traffic data to car network...")
+            graph = traffic_processor.apply_traffic_to_graph(graph)
+        
         graphs[mode] = graph
         
         mode_info = {
             "mode": mode,
             "network_type": net_type,
-            "is_combined": False
+            "is_combined": False,
+            "has_traffic_data": mode == "car"
         }
         save_graph_json(graph, f"{OUTPUT_DIR}/{mode}_graph.json", mode_info)
 

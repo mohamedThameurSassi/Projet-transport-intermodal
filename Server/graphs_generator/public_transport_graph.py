@@ -6,7 +6,7 @@ from networkx.readwrite import json_graph
 import os
 import datetime
 
-GTFS_FOLDER = "../data/gtfs_stm-3"
+GTFS_FOLDER = "../data"
 OUTPUT = "../data/graphs/gtfs_graph.json"
 
 def build_gtfs_graph():
