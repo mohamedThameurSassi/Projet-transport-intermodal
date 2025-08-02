@@ -4,7 +4,6 @@ import networkx as nx
 from networkx.readwrite import json_graph
 import json
 import datetime
-from itertools import combinations
 from traffic_data import TrafficDataProcessor
 
 # -------------------- CONFIG --------------------
@@ -51,7 +50,8 @@ def save_graph_json(graph, filename, mode_info=None):
             print(f"Link {i}: travel_time = {link.get('travel_time')}, multiplier = {link.get('traffic_multiplier')}")
 
 
-def create_index_file():
+def create_individual_graphs_index():
+    """Create index file for individual mode graphs only"""
     import datetime
     
     graph_files = []
@@ -61,36 +61,22 @@ def create_index_file():
             "filename": f"{mode}_graph.json",
             "type": "single_mode",
             "modes": [mode],
-            "description": f"Graph for {mode} transportation"
+            "description": f"Individual graph for {mode} transportation",
+            "network_type": MODES[mode]
         })
-    
-    for combo in combinations(MODES.keys(), 2):
-        mode_name = "_".join(combo)
-        graph_files.append({
-            "filename": f"{mode_name}_graph.json",
-            "type": "multi_mode",
-            "modes": list(combo),
-            "description": f"Combined graph for {' and '.join(combo)} transportation"
-        })
-    
-    graph_files.append({
-        "filename": "car_bike_walk_graph.json",
-        "type": "all_modes",
-        "modes": list(MODES.keys()),
-        "description": "Combined graph for all transportation modes"
-    })
     
     index_data = {
         "generated_at": datetime.datetime.now().isoformat(),
         "place": PLACE_NAME,
         "available_graphs": graph_files,
-        "total_graphs": len(graph_files)
+        "total_graphs": len(graph_files),
+        "note": "Individual mode graphs only. Use graph_merger.py for multimodal combinations."
     }
     
-    index_path = f"{OUTPUT_DIR}/graphs_index.json"
+    index_path = f"{OUTPUT_DIR}/individual_graphs_index.json"
     with open(index_path, "w") as f:
         json.dump(index_data, f, indent=2)
-    print(f"📋 Created index file: {index_path}")
+    print(f"📋 Created individual graphs index: {index_path}")
 
 def main():
     ox.settings.log_console = True
@@ -98,52 +84,40 @@ def main():
 
     ensure_dir(OUTPUT_DIR)
 
-    graphs = {}
-
+    # Initialize traffic processor
     traffic_processor = TrafficDataProcessor()
-    traffic_processor.download_traffic_data()
-    traffic_processor.process_traffic_data()
+    print("Downloading and processing traffic data...")
+    if traffic_processor.download_traffic_data():
+        traffic_processor.process_traffic_data()
+        # Create parking cost map from real traffic density data
+        traffic_processor.download_parking_data()
 
+    # Generate individual mode graphs only
     for mode, net_type in MODES.items():
-        print(f"📥 Downloading '{mode}' graph...")
+        print(f"\n📥 Downloading '{mode}' graph...")
         graph = ox.graph_from_place(PLACE_NAME, network_type=net_type)
+        
+        # Apply mode-specific enhancements
         if mode == "car":
             print("🚗 Applying traffic data to car network...")
             graph = traffic_processor.apply_traffic_to_graph(graph)
-        
-        graphs[mode] = graph
+            print("🅿️  Adding parking cost data to car network...")
+            graph = traffic_processor.add_parking_costs_to_graph(graph)
+            print("🏙️  Applying zoning-based travel time penalties...")
+            graph = traffic_processor.apply_zoning_travel_time_penalty(graph)
         
         mode_info = {
             "mode": mode,
             "network_type": net_type,
             "is_combined": False,
-            "has_traffic_data": mode == "car"
+            "has_traffic_data": mode == "car",
+            "has_parking_data": mode == "car"
         }
         save_graph_json(graph, f"{OUTPUT_DIR}/{mode}_graph.json", mode_info)
 
-    for combo in combinations(MODES.keys(), 2):
-        mode_name = "_".join(combo)
-        print(f"🔗 Combining: {combo[0]} + {combo[1]}")
-        G_combo = nx.compose(graphs[combo[0]], graphs[combo[1]])
-        
-        combo_info = {
-            "modes": list(combo),
-            "network_types": [MODES[mode] for mode in combo],
-            "is_combined": True
-        }
-        save_graph_json(G_combo, f"{OUTPUT_DIR}/{mode_name}_graph.json", combo_info)
-
-    print("🌐 Combining all modes: car + bike + walk")
-    G_all = nx.compose_all([graphs[m] for m in MODES])
-    
-    all_info = {
-        "modes": list(MODES.keys()),
-        "network_types": list(MODES.values()),
-        "is_combined": True
-    }
-    save_graph_json(G_all, f"{OUTPUT_DIR}/car_bike_walk_graph.json", all_info)
-    
-    create_index_file()
+    create_individual_graphs_index()
+    print("\n🎉 Individual mode graphs generated successfully!")
+    print("💡 Use graph_merger.py to create multimodal combinations")
 
 if __name__ == "__main__":
     main()
