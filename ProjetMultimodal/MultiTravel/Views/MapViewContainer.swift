@@ -25,13 +25,22 @@ struct MapViewContainer: UIViewRepresentable {
         mapView.userTrackingMode = userTrackingMode
         mapView.mapType = mapType
         
+        // Always start with Montreal region - this ensures proper initial zoom
+        let montrealRegion = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 45.5017, longitude: -73.5673),
+            latitudinalMeters: 2000, // 2km view
+            longitudinalMeters: 2000
+        )
+        mapView.setRegion(montrealRegion, animated: false)
+        
+        // If we have user location, zoom to it
         if let location = locationManager.lastLocation {
-            let region = MKCoordinateRegion(
+            let userRegion = MKCoordinateRegion(
                 center: location.coordinate,
                 latitudinalMeters: defaultZoomMeters,
                 longitudinalMeters: defaultZoomMeters
             )
-            mapView.setRegion(region, animated: false)
+            mapView.setRegion(userRegion, animated: false)
         }
         
         return mapView
@@ -70,13 +79,10 @@ struct MapViewContainer: UIViewRepresentable {
             return
         }
 
-        if let location = locationManager.lastLocation {
-            let region = MKCoordinateRegion(
-                center: location.coordinate,
-                latitudinalMeters: defaultZoomMeters,
-                longitudinalMeters: defaultZoomMeters
-            )
-            uiView.setRegion(region, animated: true)
+        // Update region based on location manager's region (this handles Montreal default + user location updates)
+        if uiView.region.center.latitude != locationManager.region.center.latitude ||
+           uiView.region.center.longitude != locationManager.region.center.longitude {
+            uiView.setRegion(locationManager.region, animated: true)
         }
 
         if let route = currentRoute {
@@ -116,6 +122,17 @@ struct MapViewContainer: UIViewRepresentable {
             }
             
             return annotationView
+        }
+        
+        // Handle POI (Points of Interest) selection
+        func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+            print("Selected annotation: \(view.annotation?.title ?? "Unknown")")
+            
+            // Handle custom annotations (search results)
+            if let annotation = view.annotation, !(annotation is MKUserLocation) {
+                print("Selected place: \(annotation.title ?? "Unknown")")
+                // You could trigger navigation here or show more details
+            }
         }
     }
 }

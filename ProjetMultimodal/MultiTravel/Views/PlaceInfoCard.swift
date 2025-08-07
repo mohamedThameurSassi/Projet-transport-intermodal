@@ -1,11 +1,11 @@
 import SwiftUI
 import MapKit
 
-// MARK: - Place Info Card
 struct PlaceInfoCard: View {
     let place: MKMapItem
     let onClose: () -> Void
     let onDirections: () -> Void
+    let onCarWalkDirections: () -> Void
     let onFavoriteToggle: () -> Void
     let isFavorite: Bool
     
@@ -38,19 +38,49 @@ struct PlaceInfoCard: View {
                 }
             }
             
-            HStack(spacing: 16) {
-                Button(action: onDirections) {
-                    HStack {
-                        Image(systemName: "arrow.triangle.turn.up.right.diamond")
-                        Text("Directions")
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button(action: onDirections) {
+                        HStack {
+                            Image(systemName: "arrow.triangle.turn.up.right.diamond")
+                                .font(.system(size: 14, weight: .medium))
+                            Text("Directions")
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
+                    
+                    Button(action: onCarWalkDirections) {
+                        HStack {
+                            Image(systemName: "car.fill")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("+")
+                                .font(.system(size: 12, weight: .bold))
+                            Image(systemName: "figure.walk")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            LinearGradient(
+                                gradient: Gradient(colors: [.green, .mint]),
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                    }
                 }
-                .frame(maxWidth: .infinity)
+                
+                Text("🚗 + 🚶 Get healthier route with parking and walking")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
             }
         }
         .padding()

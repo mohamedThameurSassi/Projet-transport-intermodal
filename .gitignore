@@ -215,3 +215,6 @@ Server/cache/f2e6a320ee0e7c0f3e5f01f625f39507b14af2c1.json
 Server/cache/799cdf37907c19d8d27bc992500ac2397e37beb3.json
 Server/data/stop_times.txt
 Server/data/stops.txt
+health-route-server/graph_generators/data_json
+health-route-server/graph_generators/cache
+health-route-server/data

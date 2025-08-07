@@ -234,12 +234,14 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingDirections) {
             if let place = selectedPlace {
-                DirectionsView(
+                HealthTripPlannerView(
                     destination: place,
                     locationManager: locationManager
-                ) { route in
-                    currentRoute = route
+                ) { routeOption in
+                    // For now, we'll just display the first segment's route
+                    // In a full implementation, you'd want to display all segments
                     showingDirections = false
+                    // TODO: Display the health route on map
                 }
             }
         }

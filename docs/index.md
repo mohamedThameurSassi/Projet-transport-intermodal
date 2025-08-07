@@ -22,14 +22,21 @@
 - Mohamed Thameur Sassi: CEO
 
 ## Description du projet
-Un outil de prévision de trajet multimodal dans la ville de Montréal
+Un outil de prévision de trajet orienté santé dans la ville de Montréal
 
 ### Contexte
+L'utilisation excessive de la voiture et le mode de vie sédentaire constituent des problèmes de santé publique majeurs. Parallèlement, Montréal dispose d'une infrastructure de transport diversifiée (STM, ARTM, REM, BIXI) qui pourrait être mieux exploitée pour promouvoir l'activité physique.
 
 ### Problématique ou motivations
-La ville de Montréal, nous avons accès à plusieurs type de transport différents. En particulier si on prend en compte les différents service de transport autour de la métropole (STM,ARTM,REM et BIXI) Cependant, les services sont très concentrés dans une partie de la ville et les arrondissements comme Montréal-Nord, Anjou et Rivière-des-Prairies sont pris à dépendre d'un réseau d'autobus peu performant. Pour les habitants de ces arrondissements, il est souvent plus pratique de prendre le vélo ou la voiture pour se rendre à un métro cependant il n'existe pas de solution permettant de calculer de tels itinéraires
+Bien que les applications de navigation existantes optimisent pour le temps ou la distance, aucune ne priorise la santé des utilisateurs. Les gens choisissent souvent la voiture par commodité, même pour des trajets qui pourraient inclure de la marche ou du vélo bénéfiques pour leur santé. Il manque un outil qui propose des alternatives actives en montrant clairement les bénéfices santé (calories brûlées, exercice) et environnementaux.
+
 ### Proposition et objectifs
-Pour répondre à cette problématique, je vais construire une application mobile permettant de calculer des itinéraires avec des transports multimodaux. Elle aura poir objectif de diminuer la dépendance aux voitures, diminuer l'emprunte carbonne et faciliter les transports à l'aide des transports en commun de Montréal
+Développement d'une application mobile qui :
+- Propose des alternatives de transport orientées santé
+- Affiche les calories brûlées et le score de santé pour chaque option
+- Intègre marche, vélo et transport en commun de manière optimale
+- Encourage l'activité physique quotidienne à travers les déplacements
+- Communique avec un serveur Go pour le calcul d'itinéraires intelligents
 
 ## Échéancier
 
