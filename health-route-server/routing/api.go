@@ -9,31 +9,32 @@ type RouteRequest struct {
 }
 
 type RouteResponse struct {
-	Steps            []RouteStep `json:"steps"`
-	Error            string      `json:"error,omitempty"`
-	TotalDistanceM   float64     `json:"totalDistanceM"`
-	TotalDurationSec float64     `json:"totalDurationSec"`
-	WalkDistanceM    float64     `json:"walkDistanceM"`
-	WalkDurationSec  float64     `json:"walkDurationSec"`
-	CarDistanceM     float64     `json:"carDistanceM"`
-	CarDurationSec   float64     `json:"carDurationSec"`
+	CarOrTransitStart Coordinate `json:"carOrTransitStart"`
+	WalkStart         Coordinate `json:"walkStart"`
+	WalkEnd           Coordinate `json:"walkEnd"`
+	WalkDurationSec   float64    `json:"walkDurationSec"`
 }
 
 func PrepareResponse(steps []RouteStep) RouteResponse {
-	resp := RouteResponse{
-		Steps: steps,
+	resp := RouteResponse{}
+
+	// Determine first car or transit start
+	for _, step := range steps {
+		if step.Mode == "car" || step.Mode == "transit" {
+			resp.CarOrTransitStart = step.FromCoord
+			break
+		}
 	}
 
+	walkModes := map[string]bool{"walk": true, "walk_final": true, "walk_to_transit": true, "walk_from_transit": true}
+	firstWalkSet := false
 	for _, step := range steps {
-		resp.TotalDistanceM += step.DistanceM
-		resp.TotalDurationSec += step.DurationSec
-
-		switch step.Mode {
-		case "car":
-			resp.CarDistanceM += step.DistanceM
-			resp.CarDurationSec += step.DurationSec
-		case "walk_final", "walk_to_transit", "walk_from_transit":
-			resp.WalkDistanceM += step.DistanceM
+		if walkModes[step.Mode] {
+			if !firstWalkSet {
+				resp.WalkStart = step.FromCoord
+				firstWalkSet = true
+			}
+			resp.WalkEnd = step.ToCoord // keeps updating to last walk segment end
 			resp.WalkDurationSec += step.DurationSec
 		}
 	}

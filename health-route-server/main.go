@@ -58,13 +58,10 @@ type Graph struct {
 }
 
 var (
-	carGraph          *Graph
-	bikeGraph         *Graph
-	walkGraph         *Graph
-	gtfsGraph         *Graph
-	walkWithGtfsGraph *Graph
-	graphsLoaded      bool = false
-	gtfsDataLoaded    bool = false // track GTFS preprocessing
+	carGraph  *Graph
+	bikeGraph *Graph
+	walkGraph *Graph
+	gtfsGraph *Graph
 
 	// Cached routing graphs (converted once)
 	routingCarGraph  *routing.Graph
@@ -160,12 +157,6 @@ func loadGraphs() error {
 		return fmt.Errorf("failed to load gtfs graph: %v", err)
 	}
 
-	walkWithGtfsGraph, err = loadGraph(filepath.Join(dataDir, "walk_with_gtfs.gob"))
-	if err != nil {
-		return fmt.Errorf("failed to load walk+gtfs graph: %v", err)
-	}
-
-	graphsLoaded = true
 	log.Println("Successfully loaded all pre-generated graphs")
 	return nil
 }
@@ -317,7 +308,12 @@ func handleCarWalkRoute(c *gin.Context) {
 	log.Printf("Route calculation completed, found %d steps", len(steps))
 
 	resp := routing.PrepareResponse(steps)
-	log.Printf("Sending response with %d route steps", len(resp.Steps))
+	log.Printf("Sending response: car/transit start=(%.6f,%.6f) walkStart=(%.6f,%.6f) walkEnd=(%.6f,%.6f) walkDur=%.1fs",
+		resp.CarOrTransitStart.Lat, resp.CarOrTransitStart.Lon,
+		resp.WalkStart.Lat, resp.WalkStart.Lon,
+		resp.WalkEnd.Lat, resp.WalkEnd.Lon,
+		resp.WalkDurationSec,
+	)
 	c.JSON(http.StatusOK, resp)
 	log.Println("=== Car+walk route request completed ===")
 }
@@ -355,9 +351,13 @@ func handleTransitRoute(c *gin.Context) {
 
 	log.Printf("Transit route calculation completed, found %d steps", len(steps))
 
-	// Prepare and send response
 	resp := routing.PrepareResponse(steps)
-	log.Printf("Sending response with %d route steps", len(resp.Steps))
+	log.Printf("Sending response: transit start=(%.6f,%.6f) walkStart=(%.6f,%.6f) walkEnd=(%.6f,%.6f) walkDur=%.1fs",
+		resp.CarOrTransitStart.Lat, resp.CarOrTransitStart.Lon,
+		resp.WalkStart.Lat, resp.WalkStart.Lon,
+		resp.WalkEnd.Lat, resp.WalkEnd.Lon,
+		resp.WalkDurationSec,
+	)
 	c.JSON(http.StatusOK, resp)
 	log.Println("=== Transit route request completed ===")
 }
@@ -384,7 +384,6 @@ func main() {
 	if _, err := preprocessing.LoadGTFSIndexOnce("data"); err != nil { // assuming GTFS txt files in data/
 		log.Printf("Warning: failed to load GTFS index: %v", err)
 	} else {
-		gtfsDataLoaded = true
 		log.Println("GTFS index loaded successfully at startup")
 	}
 
