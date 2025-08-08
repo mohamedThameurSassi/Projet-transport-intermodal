@@ -13,10 +13,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"health-route-server/preprocessing"
 	"health-route-server/routing"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
 // Graph structures for pre-loaded routing data (matching the stored GOB format)
@@ -62,6 +64,11 @@ var (
 	gtfsGraph         *Graph
 	walkWithGtfsGraph *Graph
 	graphsLoaded      bool = false
+	gtfsDataLoaded    bool = false // track GTFS preprocessing
+
+	// Cached routing graphs (converted once)
+	routingCarGraph  *routing.Graph
+	routingWalkGraph *routing.Graph
 )
 
 type OSRMConfig struct {
@@ -291,27 +298,14 @@ func handleCarWalkRoute(c *gin.Context) {
 		log.Printf("Using default walk duration: %.1f minutes", req.WalkDurationMins)
 	}
 
-	// Check if graphs are loaded
-	if !graphsLoaded {
-		log.Println("ERROR: Graphs not loaded")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Graphs not loaded"})
+	// Validate cached graphs
+	if routingCarGraph == nil || routingWalkGraph == nil {
+		log.Println("ERROR: Cached routing graphs not initialized")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "routing graphs not initialized"})
 		return
 	}
 
-	log.Printf("Converting graphs - Car graph: %d nodes, Walk graph: %d nodes",
-		len(carGraph.Nodes), len(walkGraph.Nodes))
-
-	// Convert stored graphs to routing graphs
-	log.Println("Converting car graph...")
-	routingCarGraph := carGraph.toRoutingGraph()
-	log.Println("Converting walk graph...")
-	routingWalkGraph := walkGraph.toRoutingGraph()
-
-	log.Printf("Converted graphs - Car: %d nodes, Walk: %d nodes",
-		len(routingCarGraph.Nodes), len(routingWalkGraph.Nodes))
-
-	// Calculate route
-	log.Println("Starting route calculation...")
+	log.Println("Starting route calculation using cached graphs...")
 	steps := routing.PlanCarPlusLastWalk(
 		routing.Coordinate{Lat: req.StartLat, Lon: req.StartLon},
 		routing.Coordinate{Lat: req.EndLat, Lon: req.EndLon},
@@ -322,15 +316,14 @@ func handleCarWalkRoute(c *gin.Context) {
 
 	log.Printf("Route calculation completed, found %d steps", len(steps))
 
-	// Prepare and send response
 	resp := routing.PrepareResponse(steps)
 	log.Printf("Sending response with %d route steps", len(resp.Steps))
 	c.JSON(http.StatusOK, resp)
 	log.Println("=== Car+walk route request completed ===")
 }
 
-func handleSubwayWalkRoute(c *gin.Context) {
-	log.Println("=== Received subway+walk route request ===")
+func handleTransitRoute(c *gin.Context) {
+	log.Println("=== Received transit route request ===")
 
 	var req routing.RouteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -339,49 +332,61 @@ func handleSubwayWalkRoute(c *gin.Context) {
 		return
 	}
 
-	log.Printf("Request details: Start(%.6f, %.6f) -> End(%.6f, %.6f), Walk duration: %.1f mins",
+	log.Printf("Request details: Start(%.6f, %.6f) -> End(%.6f, %.6f), Max walk: %.1f mins",
 		req.StartLat, req.StartLon, req.EndLat, req.EndLon, req.WalkDurationMins)
 
 	if req.WalkDurationMins == 0 {
-		req.WalkDurationMins = 15
+		req.WalkDurationMins = 15 // 15 minutes default walking
 		log.Printf("Using default walk duration: %.1f minutes", req.WalkDurationMins)
 	}
 
-	if !graphsLoaded {
-		log.Println("ERROR: Graphs not loaded")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Graphs not loaded"})
-		return
-	}
-
-	log.Printf("Converting walk+subway graph: %d nodes", len(walkWithGtfsGraph.Nodes))
-
-	log.Println("Converting walk+subway graph...")
-	routingWalkSubwayGraph := walkWithGtfsGraph.toRoutingGraph()
-
-	log.Printf("Converted walk+subway graph: %d nodes", len(routingWalkSubwayGraph.Nodes))
-
-	log.Println("Starting route calculation...")
-	steps := routing.PlanSubwayPlusWalk(
+	log.Println("Starting Google Maps transit route calculation...")
+	steps, err := routing.PlanTransitPlusWalk(
 		routing.Coordinate{Lat: req.StartLat, Lon: req.StartLon},
 		routing.Coordinate{Lat: req.EndLat, Lon: req.EndLon},
-		routingWalkSubwayGraph,
 		req.WalkDurationMins,
 	)
 
-	log.Printf("Route calculation completed, found %d steps", len(steps))
+	if err != nil {
+		log.Printf("ERROR: Transit routing failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Transit routing failed: %v", err)})
+		return
+	}
 
+	log.Printf("Transit route calculation completed, found %d steps", len(steps))
+
+	// Prepare and send response
 	resp := routing.PrepareResponse(steps)
 	log.Printf("Sending response with %d route steps", len(resp.Steps))
 	c.JSON(http.StatusOK, resp)
-	log.Println("=== Subway+walk route request completed ===")
+	log.Println("=== Transit route request completed ===")
 }
 
 func main() {
+
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using default environment variables")
+	}
+
 	log.Println("Loading pre-generated graphs...")
 	if err := loadGraphs(); err != nil {
 		log.Fatalf("Failed to load required graph data: %v", err)
 	}
 	log.Println("All graphs loaded successfully!")
+
+	// Convert to routing graphs once (heavy allocation avoided per request)
+	log.Println("Converting graphs to routing format (one-time)...")
+	routingCarGraph = carGraph.toRoutingGraph()
+	routingWalkGraph = walkGraph.toRoutingGraph()
+	log.Printf("Cached routing graphs ready. Car nodes: %d, Walk nodes: %d", len(routingCarGraph.Nodes), len(routingWalkGraph.Nodes))
+
+	// Load GTFS preprocessing once
+	if _, err := preprocessing.LoadGTFSIndexOnce("data"); err != nil { // assuming GTFS txt files in data/
+		log.Printf("Warning: failed to load GTFS index: %v", err)
+	} else {
+		gtfsDataLoaded = true
+		log.Println("GTFS index loaded successfully at startup")
+	}
 
 	r := gin.Default()
 
@@ -393,7 +398,7 @@ func main() {
 
 	r.POST("/route/car-walk", handleCarWalkRoute)
 
-	r.POST("/route/subway-walk", handleSubwayWalkRoute)
+	r.POST("/route/transit", handleTransitRoute)
 
 	r.POST("/api/health-route", handleHealthRoute)
 

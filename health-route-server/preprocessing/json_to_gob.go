@@ -1,4 +1,4 @@
-package main
+package preprocessing
 
 import (
 	"encoding/gob"

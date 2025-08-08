@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"health-route-server/preprocessing"
 )
 
 type GoogleMapsConfig struct {
@@ -27,6 +30,7 @@ func LoadGoogleMapsConfig() (*GoogleMapsConfig, error) {
 	}, nil
 }
 
+// Google Maps API response structures
 type GoogleDirectionsResponse struct {
 	Routes       []GoogleRoute `json:"routes"`
 	Status       string        `json:"status"`
@@ -116,6 +120,7 @@ type GooglePolyline struct {
 	Points string `json:"points"`
 }
 
+// Main function to get transit directions from Google Maps
 func PlanTransitWithGoogle(
 	startCoord Coordinate,
 	endCoord Coordinate,
@@ -135,6 +140,7 @@ func PlanTransitWithGoogle(
 	params.Set("mode", "transit")
 	params.Set("key", config.APIKey)
 
+	// Request alternatives
 	params.Set("alternatives", "true")
 	params.Set("units", "metric")
 
@@ -144,6 +150,7 @@ func PlanTransitWithGoogle(
 		params.Set("departure_time", "now")
 	}
 
+	// Optimize for less walking if specified
 	if maxWalkMinutes > 0 && maxWalkMinutes < 30 {
 		params.Set("transit_routing_preference", "less_walking")
 	}
@@ -176,6 +183,7 @@ func PlanTransitWithGoogle(
 		return nil, fmt.Errorf("no transit routes found")
 	}
 
+	// Use the best route (first one)
 	bestRoute := googleResp.Routes[0]
 	steps := convertGoogleRouteToSteps(bestRoute, startCoord, endCoord)
 
@@ -195,6 +203,7 @@ func convertGoogleRouteToSteps(route GoogleRoute, startCoord, endCoord Coordinat
 		}
 	}
 
+	// Ensure start and end coordinates match exactly
 	if len(steps) > 0 {
 		steps[0].FromCoord = startCoord
 		steps[len(steps)-1].ToCoord = endCoord
@@ -248,6 +257,7 @@ func convertGoogleStep(googleStep GoogleStep) *RouteStep {
 				step.DurationSec/60,
 			)
 
+			// Set precise stop locations
 			step.FromCoord = Coordinate{
 				Lat: td.DepartureStop.Location.Lat,
 				Lon: td.DepartureStop.Location.Lng,
@@ -277,32 +287,17 @@ func convertGoogleStep(googleStep GoogleStep) *RouteStep {
 }
 
 func stripHTMLTags(html string) string {
+	// Simple HTML tag removal
 	result := html
-
-	replacements := [][]string{
-		{"<b>", ""},
-		{"</b>", ""},
-		{"<div>", " "},
-		{"</div>", ""},
-		{"<div style=\"font-size:0.9em\">", " - "},
-		{"&nbsp;", " "},
-		{"&amp;", "&"},
-		{"&lt;", "<"},
-		{"&gt;", ">"},
-		{"<wbr/>", ""},
-		{"<wbr>", ""},
-	}
-
-	for _, pair := range replacements {
-		result = strings.ReplaceAll(result, pair[0], pair[1])
-	}
-
-	result = strings.TrimSpace(result)
-	result = strings.Join(strings.Fields(result), " ")
-
+	result = strings.ReplaceAll(result, "<b>", "")
+	result = strings.ReplaceAll(result, "</b>", "")
+	result = strings.ReplaceAll(result, "<div>", "")
+	result = strings.ReplaceAll(result, "</div>", "")
+	result = strings.ReplaceAll(result, "&nbsp;", " ")
 	return result
 }
 
+// Wrapper function for easier use
 func PlanTransitPlusWalk(
 	startCoord Coordinate,
 	endCoord Coordinate,
@@ -317,7 +312,7 @@ func PlanTransitPlusWalk(
 		startCoord,
 		endCoord,
 		config,
-		nil,
+		nil, // Use current time
 		maxWalkMinutes,
 	)
 
@@ -325,8 +320,10 @@ func PlanTransitPlusWalk(
 		return nil, err
 	}
 
+	// Tag walking steps appropriately
 	for i := range steps {
 		if steps[i].Mode == "walk" {
+			// Determine if this is walking to transit, from transit, or between transit
 			if i == 0 || (i > 0 && steps[i-1].Mode != "walk") {
 				if i < len(steps)-1 && steps[i+1].Mode == "transit" {
 					steps[i].Mode = "walk_to_transit"
@@ -339,6 +336,7 @@ func PlanTransitPlusWalk(
 		}
 	}
 
+	// Validate total walking time
 	totalWalkSec := 0.0
 	for _, step := range steps {
 		if step.Mode == "walk" || step.Mode == "walk_to_transit" || step.Mode == "walk_from_transit" {
@@ -352,6 +350,7 @@ func PlanTransitPlusWalk(
 	return steps, nil
 }
 
+// Function to get multiple transit alternatives
 func GetTransitAlternatives(
 	startCoord Coordinate,
 	endCoord Coordinate,
@@ -407,3 +406,150 @@ func GetTransitAlternatives(
 	log.Printf("Found %d alternative transit routes", len(alternatives))
 	return alternatives, nil
 }
+
+// PlanTransitEarlierStopPlusWalk attempts to alight earlier from the final transit segment to maximize healthy walking under a time cap.
+// Workflow:
+// 1) Get a baseline transit itinerary from Google (PlanTransitWithGoogle)
+// 2) Take the last transit step's arrival stop coords
+// 3) Match to nearest GTFS stop (preloaded index)
+// 4) In the same canonical trip pattern, enumerate earlier stops
+// 5) For each earlier stop, compute walking time (A*) to destination
+// 6) Pick the earliest (farthest upstream) stop whose walk time is the largest <= maxWalkMinutes; fallback to shortest walk if none fit
+func PlanTransitEarlierStopPlusWalk(
+	startCoord Coordinate,
+	endCoord Coordinate,
+	maxWalkMinutes float64,
+	walkGraph *Graph,
+) ([]RouteStep, error) {
+	log.Printf("=== PlanTransitEarlierStopPlusWalk ===")
+	log.Printf("Start(%.6f,%.6f) End(%.6f,%.6f) Walk cap: %.1f min WalkGraph nodes: %d", startCoord.Lat, startCoord.Lon, endCoord.Lat, endCoord.Lon, maxWalkMinutes, len(walkGraph.Nodes))
+
+	cfg, err := LoadGoogleMapsConfig()
+	if err != nil {
+		return nil, fmt.Errorf("google maps config: %w", err)
+	}
+	baseSteps, err := PlanTransitWithGoogle(startCoord, endCoord, cfg, ptrNow(), 0)
+	if err != nil {
+		return nil, fmt.Errorf("google directions: %w", err)
+	}
+
+	lastTransitIdx := -1
+	for i := len(baseSteps) - 1; i >= 0; i-- {
+		if baseSteps[i].Mode == "transit" {
+			lastTransitIdx = i
+			break
+		}
+	}
+	if lastTransitIdx == -1 {
+		return baseSteps, fmt.Errorf("no transit segment found in baseline route")
+	}
+	lastTransit := baseSteps[lastTransitIdx]
+
+	gtfsIdx := preprocessing.GetGTFSIndex()
+	if gtfsIdx == nil {
+		return baseSteps, fmt.Errorf("gtfs index not loaded")
+	}
+
+	nearestStop, distM := preprocessing.FindClosestGTFSStop(lastTransit.ToCoord.Lat, lastTransit.ToCoord.Lon, gtfsIdx)
+	log.Printf("Matched Google arrival to GTFS stop %s (%.0fm)", nearestStop.Name, distM)
+	tripID, routeID, dir, err := preprocessing.ChooseCanonicalTripThatContainsStop(nearestStop.ID, gtfsIdx)
+	if err != nil {
+		return baseSteps, fmt.Errorf("canonical trip: %w", err)
+	}
+	log.Printf("Canonical trip selected: trip=%s route=%s dir=%d", tripID, routeID, dir)
+	beforeStops, seq, err := preprocessing.StopsBeforeInSameTrip(nearestStop.ID, tripID, gtfsIdx)
+	if err != nil {
+		return baseSteps, fmt.Errorf("earlier stops: %w", err)
+	}
+	if len(beforeStops) == 0 {
+		return baseSteps, fmt.Errorf("no earlier stops before stop %s (seq=%d)", nearestStop.ID, seq)
+	}
+
+	maxWalkSec := maxWalkMinutes * 60
+	destNode, _ := findNearestNode(endCoord, walkGraph)
+
+	var chosen *preprocessing.GTFSStop
+	var chosenWalkTime, chosenWalkDist float64
+	var chosenCoord Coordinate
+
+	for _, cand := range beforeStops {
+		candCoord := Coordinate{Lat: cand.Lat, Lon: cand.Lon}
+		candNode, _ := findNearestNode(candCoord, walkGraph)
+		_, walkTime, walkDist := findShortestPathAStar(walkGraph, candNode, destNode, "walk")
+		if walkTime <= 0 || math.IsInf(walkTime, 1) {
+			continue
+		}
+		if walkTime <= maxWalkSec && walkTime > chosenWalkTime {
+			candCopy := cand
+			chosen = &candCopy
+			chosenWalkTime = walkTime
+			chosenWalkDist = walkDist
+			chosenCoord = candCoord
+		}
+	}
+
+	if chosen == nil {
+		var fallback *preprocessing.GTFSStop
+		bestDiff := math.Inf(1)
+		for _, cand := range beforeStops {
+			candCoord := Coordinate{Lat: cand.Lat, Lon: cand.Lon}
+			candNode, _ := findNearestNode(candCoord, walkGraph)
+			_, walkTime, walkDist := findShortestPathAStar(walkGraph, candNode, destNode, "walk")
+			if walkTime <= 0 || math.IsInf(walkTime, 1) {
+				continue
+			}
+			// Since no candidate was <= maxWalkSec, all walkTime > maxWalkSec; choose the one closest to the cap
+			diff := math.Abs(walkTime - maxWalkSec*60)
+			if diff < bestDiff {
+				candCopy := cand
+				fallback = &candCopy
+				bestDiff = diff
+				chosenWalkTime = walkTime
+				chosenWalkDist = walkDist
+				chosenCoord = candCoord
+			}
+		}
+		if fallback == nil {
+			return baseSteps, fmt.Errorf("no workable walking connection from earlier stops")
+		}
+		log.Printf("Fallback earlier alight stop chosen (closest to target walk time %.1f min): %s (walk %.1f min)", maxWalkSec/60, fallback.Name, chosenWalkTime/60)
+		chosen = fallback
+	}
+
+	log.Printf("Chosen earlier alight stop: %s (walk %.1f min, %.0fm)", chosen.Name, chosenWalkTime/60, chosenWalkDist)
+
+	out := make([]RouteStep, 0, len(baseSteps)+2)
+	if lastTransitIdx > 0 {
+		out = append(out, baseSteps[:lastTransitIdx]...)
+	}
+
+	transitDist := haversineDistance(lastTransit.FromCoord, chosenCoord)
+	transitTime := transitDist / DEFAULT_SUBWAY_SPEED_M_S
+	out = append(out, RouteStep{
+		Mode:        "transit",
+		FromCoord:   lastTransit.FromCoord,
+		ToCoord:     chosenCoord,
+		DurationSec: transitTime,
+		DistanceM:   transitDist,
+		Description: fmt.Sprintf("Stay on transit until earlier stop: %s", chosen.Name),
+	})
+
+	startWalkNode, _ := findNearestNode(chosenCoord, walkGraph)
+	_, walkTime2, walkDist2 := findShortestPathAStar(walkGraph, startWalkNode, destNode, "walk")
+	if walkTime2 > 0 {
+		chosenWalkTime = walkTime2
+		chosenWalkDist = walkDist2
+	}
+	out = append(out, RouteStep{
+		Mode:        "walk_from_transit",
+		FromCoord:   chosenCoord,
+		ToCoord:     endCoord,
+		DurationSec: chosenWalkTime,
+		DistanceM:   chosenWalkDist,
+		Description: fmt.Sprintf("Walk from %s to destination (%.1f min)", chosen.Name, chosenWalkTime/60),
+	})
+
+	return out, nil
+}
+
+func ptrNow() *time.Time { t := time.Now(); return &t }

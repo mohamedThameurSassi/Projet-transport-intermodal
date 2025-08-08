@@ -218,3 +218,5 @@ Server/data/stops.txt
 health-route-server/graph_generators/data_json
 health-route-server/graph_generators/cache
 health-route-server/data
+health-route-server/preprocessing/data_json
+health-route-server/preprocessing/cache
