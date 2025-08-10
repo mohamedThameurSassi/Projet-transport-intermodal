@@ -1,9 +1,9 @@
 import SwiftUI
 
 struct WelcomeView: View {
-    @State private var sexe: String = ""
-    @State private var weight: String = ""
-    @State private var height: String = ""
+    @AppStorage("profile.sex") private var sexe: String = ""
+    @AppStorage("profile.weight") private var weight: Double = 0
+    @AppStorage("profile.height") private var height: Double = 0
     @State private var showMainApp = false
     
     var body: some View {
@@ -16,16 +16,22 @@ struct WelcomeView: View {
                 .padding(.horizontal)
             
             VStack(spacing: 20) {
-                TextField("Sexe (M/F)", text: $sexe)
+                TextField("Sex (M/F/Other)", text: $sexe)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .keyboardType(.default)
                     .autocapitalization(.allCharacters)
-                TextField("Weight (kg)", text: $weight)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .keyboardType(.decimalPad)
-                TextField("Height (cm)", text: $height)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .keyboardType(.decimalPad)
+                HStack {
+                    TextField("Weight", value: $weight, format: .number)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .keyboardType(.decimalPad)
+                    Text("kg").foregroundColor(.secondary)
+                }
+                HStack {
+                    TextField("Height", value: $height, format: .number)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .keyboardType(.decimalPad)
+                    Text("cm").foregroundColor(.secondary)
+                }
             }
             .padding(.horizontal, 32)
             

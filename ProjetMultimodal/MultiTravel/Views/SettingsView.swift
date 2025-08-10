@@ -7,11 +7,30 @@ struct SettingsView: View {
     @StateObject private var favoritesManager = FavoritesManager()
     @State private var showingAddFavorite = false
     @AppStorage("walkingObjective") private var walkingObjective: Int = 30
+    @AppStorage("activity.weeklyMinutes") private var weeklyMinutes: Int = 0
     
     var body: some View {
         NavigationView {
             List {
                 // Walking Objective Section
+                Section("Weekly Activity") {
+                    let weeklyGoal = max(1, walkingObjective * 7)
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("This week")
+                            Spacer()
+                            Text("\(weeklyMinutes) / \(weeklyGoal) min")
+                                .foregroundColor(.secondary)
+                        }
+                        GradientProgress(value: Double(weeklyMinutes), total: Double(weeklyGoal))
+                        HStack(spacing: 12) {
+                            Button("Reset Week") { weeklyMinutes = 0 }
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
                 Section("Walking Objective") {
                     HStack {
                         Text("Daily Goal")

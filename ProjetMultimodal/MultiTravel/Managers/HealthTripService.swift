@@ -15,7 +15,9 @@ class HealthTripService: ObservableObject {
         destination: CLLocationCoordinate2D,
         originAddress: String?,
         destinationAddress: String?,
-        preferredTransport: PreferredTransportType
+        preferredTransport: PreferredTransportType,
+        exerciseMinutes: Double,
+        exerciseType: HealthTransportType
     ) async {
         await MainActor.run {
             isLoading = true
@@ -55,15 +57,15 @@ class HealthTripService: ObservableObject {
         var alternatives: [TripResponse.RouteOption] = []
         var reqId = "local_\(Int(Date().timeIntervalSince1970))"
 
-        if preferredTransport == .car {
+    if preferredTransport == .car {
             do {
-                let alt = try await requestCarWalkAlternative(origin: origin, destination: destination, walkDurationMinutes: 20)
+        let alt = try await requestCarWalkAlternative(origin: origin, destination: destination, walkDurationMinutes: exerciseMinutes)
                 alternatives = [alt]
             } catch {
             }
         } else {
             do {
-                let alt = try await requestTransitAlternative(origin: origin, destination: destination, maxWalkMinutes: 15)
+        let alt = try await requestTransitAlternative(origin: origin, destination: destination, maxWalkMinutes: exerciseMinutes)
                 alternatives = [alt]
             } catch {
             }

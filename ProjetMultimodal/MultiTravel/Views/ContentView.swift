@@ -2,6 +2,8 @@ import SwiftUI
 import MapKit
 
 struct ContentView: View {
+    @AppStorage("walkingObjective") private var walkingObjective: Int = 30
+    @AppStorage("activity.weeklyMinutes") private var weeklyMinutes: Int = 0
     @StateObject private var locationManager = LocationManager()
     @StateObject private var favoritesManager = FavoritesManager()
     @State private var searchText = ""
@@ -13,6 +15,7 @@ struct ContentView: View {
     @State private var showingDirections = false
     @State private var currentRoute: MKRoute?
     @State private var showingSettings = false
+    @State private var showingProfile = false
     @State private var userTrackingMode: MKUserTrackingMode = .none
     @State private var isStartingNavigation = false
 
@@ -33,6 +36,13 @@ struct ContentView: View {
     @State private var showingWalkSheet = false
     @State private var walkMinutes: Double = 15
     @State private var walkPOIResults: [MKMapItem] = []
+    @State private var isWalkFiltering: Bool = false
+    // Walking trip quick-start
+    @State private var pendingWalkingStart = false
+    @FocusState private var searchFieldFocused: Bool
+    // ETA filtering control
+    @State private var etaFilterRunId: Int = 0
+    @State private var ongoingDirections: [MKDirections] = []
 
     // Use POI results for map if a POI filter is active, else use searchResults
     private var mapResults: [MKMapItem] {
@@ -42,7 +52,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // Base map (enhanced vs normal)
+            
             if currentCarWalkRoute != nil || !healthOverlays.isEmpty {
                 EnhancedMapViewContainer(
                     locationManager: locationManager,
@@ -80,6 +90,7 @@ struct ContentView: View {
                         TextField("Where would you like to go?", text: $searchText)
                             .font(.system(size: 16))
                             .foregroundColor(.primary)
+                            .focused($searchFieldFocused)
                             .onSubmit { searchForPlaces() }
                             .onTapGesture {
                                 if selectedPlace != nil {
@@ -123,7 +134,7 @@ struct ContentView: View {
                             .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
                     )
 
-                    Button(action: { showingSettings = true }) {
+                    Button(action: { showingProfile = true }) {
                         Image(systemName: "gearshape.fill")
                             .font(.system(size: 18, weight: .medium))
                             .foregroundColor(.blue)
@@ -197,13 +208,12 @@ struct ContentView: View {
                 Spacer()
             }
 
-            // POIs from walk radius (bottom carousel)
-                                        // Take a walk button at bottom left
+           
                                         VStack {
                                             Spacer()
                                             HStack {
                                                 Button(action: {
-                                                    walkMinutes = 15
+                                                    walkMinutes = Double(walkingObjective)
                                                     showingWalkSheet = true
                                                 }) {
                                                     HStack(spacing: 6) {
@@ -226,7 +236,7 @@ struct ContentView: View {
                 VStack {
                     Spacer()
                     HStack {
-                        Text("POIs within \(Int(walkMinutes)) min walk")
+                        Text("POIs at least \(Int(walkMinutes)) min away")
                             .font(.headline)
                             .padding(.leading)
                         Spacer()
@@ -236,6 +246,7 @@ struct ContentView: View {
                             showingSearchResults = false
                         }
                         .padding(.trailing)
+                        .disabled(isWalkFiltering)
                     }
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 16) {
@@ -250,11 +261,16 @@ struct ContentView: View {
                         .padding(.horizontal)
                     }
                     .padding(.bottom, 10)
+                    if isWalkFiltering {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .scaleEffect(0.8)
+                    }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            // Favorites overlay
+            
             if showingFavorites && !favoritesManager.favorites.isEmpty {
                 VStack {
                     Spacer()
@@ -291,7 +307,7 @@ struct ContentView: View {
                 }
             }
 
-            // Search results / suggestions sheet-like panel
+            
             if (showingSearchResults && !searchResults.isEmpty && selectedPlace == nil)
                 || (!searchSuggestions.isEmpty && !searchText.isEmpty && selectedPlace == nil) {
                 VStack {
@@ -354,6 +370,9 @@ struct ContentView: View {
                                             searchSuggestions = []
                                             searchResults = []
                                         }
+                                        if pendingWalkingStart, let dest = selectedPlace {
+                                            startWalkingTrip(to: dest)
+                                        }
                                     }
                                     .padding(.horizontal, 16)
                                 }
@@ -372,7 +391,7 @@ struct ContentView: View {
                 }
             }
 
-            // Place info card (only when not following health route / car-walk)
+            
             if let place = selectedPlace,
                !showingSearchResults, !showingFavorites,
                selectedHealthRoute == nil, currentCarWalkRoute == nil {
@@ -404,7 +423,7 @@ struct ContentView: View {
                 }
             }
 
-            // Follow UI overlays
+            
             if let route = selectedHealthRoute,
                let idx = activeHealthSegmentIndex,
                route.segments.indices.contains(idx) {
@@ -427,12 +446,54 @@ struct ContentView: View {
                         segment: route.segments[idx],
                         index: idx,
                         total: route.segments.count,
-                        onEnd: { clearHealthFollow() }
+                        onEnd: { endHealthTripAndCreditMinutes() }
                     )
                     Spacer()
                 }
                 .padding(.top, 12)
                 .transition(.opacity)
+            }
+
+            
+            if currentRoute != nil && selectedHealthRoute == nil && currentCarWalkRoute == nil {
+                VStack {
+                    HStack(spacing: 12) {
+                        Image(systemName: "figure.walk")
+                            .foregroundColor(.white)
+                            .frame(width: 32, height: 32)
+                            .background(Circle().fill(Color.green))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Walking trip in progress")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            if let name = selectedPlace?.name {
+                                Text("To \(name)")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                        }
+                        Spacer()
+                        Button(action: { endWalkingTripAndCreditMinutes() }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "stop.fill")
+                                Text("End")
+                            }
+                            .font(.subheadline.bold())
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(Color.red.opacity(0.95)))
+                        }
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(Color.black.opacity(0.7))
+                    )
+                    .padding(.horizontal, 16)
+                    Spacer()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         // Sheets are attached to the outer ZStack to avoid brace/paren confusion
@@ -480,8 +541,8 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView()
+        .sheet(isPresented: $showingProfile) {
+            ProfileView()
         }
         .sheet(isPresented: $showingCarWalkPlanner) {
             Group {
@@ -549,6 +610,20 @@ struct ContentView: View {
         activeHealthSegmentIndex = nil
     }
 
+    
+    private func endHealthTripAndCreditMinutes() {
+        if let route = selectedHealthRoute {
+            
+            let walkingSeconds = route.segments
+                .filter { $0.transportType == .walking }
+                .map { $0.duration }
+                .reduce(0, +)
+            let mins = max(0, Int((walkingSeconds / 60.0).rounded()))
+            weeklyMinutes += mins
+        }
+        clearHealthFollow()
+    }
+
     // MARK: - Search logic
     private func searchForPlaces() {
         guard !searchText.isEmpty else { return }
@@ -576,6 +651,9 @@ struct ContentView: View {
         searchText = favorite.name
         showingFavorites = false
         showingSearchResults = false
+        if pendingWalkingStart {
+            startWalkingTrip(to: mapItem)
+        }
     }
 
     // MARK: - POI Filter Buttons
@@ -667,7 +745,7 @@ struct ContentView: View {
         let poiRequest = MKLocalPointsOfInterestRequest(center: center, radius: max(500, radius))
         poiRequest.pointOfInterestFilter = MKPointOfInterestFilter(including: [category])
 
-        MKLocalSearch(request: poiRequest).start { response, _ in
+    MKLocalSearch(request: poiRequest).start { response, _ in
             DispatchQueue.main.async {
                 if let response = response {
                     self.poiResults = response.mapItems
@@ -698,6 +776,9 @@ struct ContentView: View {
                     self.searchResults = []
                     self.showingSearchResults = false
                     self.searchSuggestions = []
+                    if self.pendingWalkingStart {
+                        self.startWalkingTrip(to: item)
+                    }
                 } else {
                     self.searchText = suggestion.title
                     self.searchForPlaces()
@@ -715,37 +796,196 @@ struct ContentView: View {
         selectedPOICategory = nil
         poiResults = []
         selectedPlace = nil
+    pendingWalkingStart = false
     }
 
-    // MARK: - Take a walk logic
+    // MARK: - Take a walk
     private func findPOIsWithinWalk(minutes: Int) {
-        guard let userLocation = locationManager.lastLocation else { return }
+        
+        let userCoord: CLLocationCoordinate2D
+        let hasAccurateUserLoc: Bool
+        if let last = locationManager.lastLocation {
+            userCoord = last.coordinate
+            hasAccurateUserLoc = true
+        } else {
+            userCoord = locationManager.region.center
+            hasAccurateUserLoc = false
+        }
 
         let walkSpeedMetersPerMin = 80.0 // ~4.8km/h
-        let radius = Double(minutes) * walkSpeedMetersPerMin
+        let baseRadius = Double(minutes) * walkSpeedMetersPerMin
+        
+        let radius = max(300, baseRadius * 2.0)
 
-        // Use MKLocalPointsOfInterestRequest for walk POIs
-        let poiRequest = MKLocalPointsOfInterestRequest(center: userLocation.coordinate, radius: max(200, radius))
-        // Optionally, you can set categories here if you want to filter
-        // poiRequest.pointOfInterestFilter = ...
+        
+        let poiRequest = MKLocalPointsOfInterestRequest(center: userCoord, radius: max(200, radius))
+        
 
-        MKLocalSearch(request: poiRequest).start { response, _ in
+        
+        ongoingDirections.forEach { $0.cancel() }
+        ongoingDirections.removeAll()
+        etaFilterRunId &+= 1
+        isWalkFiltering = true
+
+    MKLocalSearch(request: poiRequest).start { response, _ in
             DispatchQueue.main.async {
-                if let items = response?.mapItems {
-                    self.walkPOIResults = items
-                    self.searchResults = items
-                    self.selectedPlace = nil
-                    self.showingSearchResults = false
-                    // Optionally, center the map to the walk search region
-                    let region = MKCoordinateRegion(center: userLocation.coordinate, latitudinalMeters: radius * 2, longitudinalMeters: radius * 2)
-                    self.locationManager.region = region
-                } else {
-                    self.walkPOIResults = []
-                    self.searchResults = []
-                    self.showingSearchResults = false
+                let items = response?.mapItems ?? []
+
+                
+                self.currentRoute = nil
+                self.currentCarWalkRoute = nil
+                self.selectedHealthRoute = nil
+                self.healthOverlays = []
+                self.activeHealthSegmentIndex = nil
+                self.showingFavorites = false
+                self.selectedPlace = nil
+                self.showingSearchResults = false
+
+                
+                self.walkPOIResults = items
+                self.searchResults = items
+
+                
+                let region = MKCoordinateRegion(center: userCoord, latitudinalMeters: radius * 2, longitudinalMeters: radius * 2)
+                self.locationManager.region = region
+
+                
+                guard hasAccurateUserLoc, !items.isEmpty else {
+                    self.isWalkFiltering = false
+                    return
+                }
+
+                
+                self.filterPOIsByWalkingETA(items: items, minutes: minutes, atLeast: true)
+            }
+        }
+    }
+
+    
+    private func filterPOIsByWalkingETA(items: [MKMapItem], minutes: Int, atLeast: Bool) {
+        guard let userLocation = locationManager.lastLocation else {
+            
+            self.walkPOIResults = items
+            self.searchResults = items
+            self.isWalkFiltering = false
+            return
+        }
+        let source = MKMapItem(placemark: MKPlacemark(coordinate: userLocation.coordinate))
+        let threshold: TimeInterval = TimeInterval(minutes * 60)
+        let metersPerMinute = 80.0
+        let thresholdDistance = metersPerMinute * Double(minutes)
+
+        
+        let candidates = items
+            .filter { item in
+                let d = CLLocation(latitude: userLocation.coordinate.latitude, longitude: userLocation.coordinate.longitude)
+                    .distance(from: CLLocation(latitude: item.placemark.coordinate.latitude, longitude: item.placemark.coordinate.longitude))
+                // We're looking for at least N minutes away; drop obviously closer items
+                return d >= thresholdDistance * 0.9 // small cushion
+            }
+            .sorted { a, b in
+                let da = CLLocation(latitude: userLocation.coordinate.latitude, longitude: userLocation.coordinate.longitude)
+                    .distance(from: CLLocation(latitude: a.placemark.coordinate.latitude, longitude: a.placemark.coordinate.longitude))
+                let db = CLLocation(latitude: userLocation.coordinate.latitude, longitude: userLocation.coordinate.longitude)
+                    .distance(from: CLLocation(latitude: b.placemark.coordinate.latitude, longitude: b.placemark.coordinate.longitude))
+                return da < db
+            }
+
+        
+        let maxRequests = 8
+        let list = Array(candidates.prefix(maxRequests))
+
+        var kept: [(MKMapItem, TimeInterval)] = []
+        let currentRunId = etaFilterRunId
+
+    func process(index: Int) {
+            
+            if currentRunId != etaFilterRunId { return }
+            if index >= list.count {
+                
+                if currentRunId == etaFilterRunId {
+            let sorted = kept.sorted(by: { $0.1 < $1.1 }).map { $0.0 }
+            // Fallback: if nothing met the threshold, keep the nearest few so the user sees POIs
+            let final = sorted.isEmpty ? list : sorted
+            self.walkPOIResults = final
+            self.searchResults = final
+            self.isWalkFiltering = false
+                }
+                return
+            }
+
+            let item = list[index]
+            let req = MKDirections.Request()
+            req.source = source
+            req.destination = item
+            req.transportType = .walking
+            req.requestsAlternateRoutes = false
+
+            let directions = MKDirections(request: req)
+            self.ongoingDirections.append(directions)
+            directions.calculateETA { etaResp, _ in
+                // Remove from ongoing
+                if let i = self.ongoingDirections.firstIndex(where: { $0 === directions }) {
+                    self.ongoingDirections.remove(at: i)
+                }
+                if let eta = etaResp?.expectedTravelTime {
+                    let pass = atLeast ? (eta >= threshold) : (eta <= threshold)
+                    if pass { kept.append((item, eta)) }
+                    
+                    let interim = kept.sorted(by: { $0.1 < $1.1 }).map { $0.0 }
+                    if currentRunId == etaFilterRunId {
+                        self.walkPOIResults = interim.isEmpty ? self.walkPOIResults : interim
+                        self.searchResults = interim.isEmpty ? self.searchResults : interim
+                    }
+                }
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    process(index: index + 1)
                 }
             }
         }
+
+        process(index: 0)
+    }
+
+    // MARK: - Start walking trip
+    private func startWalkingTrip(to destination: MKMapItem) {
+        pendingWalkingStart = false
+        showingFavorites = false
+        showingSearchResults = false
+        
+        guard let userLocation = locationManager.lastLocation else { return }
+        let sourcePlacemark = MKPlacemark(coordinate: userLocation.coordinate)
+        let source = MKMapItem(placemark: sourcePlacemark)
+
+        let request = MKDirections.Request()
+        request.source = source
+        request.destination = destination
+        request.transportType = .walking
+        request.requestsAlternateRoutes = false
+
+        MKDirections(request: request).calculate { response, error in
+            guard let route = response?.routes.first else { return }
+            DispatchQueue.main.async {
+                self.currentRoute = route
+                self.selectedPlace = destination
+                self.currentCarWalkRoute = nil
+                self.selectedHealthRoute = nil
+                self.healthOverlays = []
+                self.activeHealthSegmentIndex = nil
+                
+            }
+        }
+    }
+
+    
+    private func endWalkingTripAndCreditMinutes() {
+        guard let route = currentRoute else { return }
+        let mins = max(0, Int((route.expectedTravelTime / 60.0).rounded()))
+        weeklyMinutes += mins
+        // Clear the active route and selection
+        currentRoute = nil
+        selectedPlace = nil
     }
 }
 

@@ -10,6 +10,18 @@ struct HealthTripPlannerView: View {
     @StateObject private var healthTripService = HealthTripService()
     @Environment(\.presentationMode) var presentationMode
     @State private var showingResults = false
+    @State private var exerciseMinutes: Double = 15
+    @State private var exerciseType: HealthTransportType = .walking
+    @State private var originMode: StartOriginMode = .current
+    @State private var customStartText: String = ""
+    @State private var customStartResults: [MKMapItem] = []
+    @State private var isSearchingStart: Bool = false
+    @State private var customStartItem: MKMapItem? = nil
+
+    enum StartOriginMode: String, CaseIterable {
+        case current
+        case custom
+    }
     
     var body: some View {
         NavigationView {
@@ -120,6 +132,143 @@ struct HealthTripPlannerView: View {
                     }
                 }
                 .padding(.horizontal, 20)
+
+                // Start location selection
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Start location")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.primary)
+
+                    Picker("Origin", selection: $originMode) {
+                        Text("Current location").tag(StartOriginMode.current)
+                        Text("Custom place").tag(StartOriginMode.custom)
+                    }
+                    .pickerStyle(.segmented)
+
+                    if originMode == .custom {
+                        VStack(spacing: 8) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                                TextField("Search a start place", text: $customStartText)
+                                    .textInputAutocapitalization(.words)
+                                    .onChange(of: customStartText) { _ in
+                                        searchStartPlaces()
+                                    }
+                                if !customStartText.isEmpty {
+                                    Button(action: {
+                                        customStartText = ""
+                                        customStartResults = []
+                                    }) {
+                                        Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                            .padding(12)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
+
+                            if isSearchingStart {
+                                HStack(spacing: 8) {
+                                    ProgressView().scaleEffect(0.8)
+                                    Text("Searching...").foregroundColor(.secondary)
+                                }
+                            }
+
+                            if let chosen = customStartItem {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "mappin.and.ellipse").foregroundColor(.blue)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(chosen.name ?? "Selected place")
+                                            .font(.system(size: 14, weight: .semibold))
+                                        if let addr = chosen.placemark.title {
+                                            Text(addr).font(.system(size: 12)).foregroundColor(.secondary).lineLimit(1)
+                                        }
+                                    }
+                                    Spacer()
+                                    Button("Clear") { customStartItem = nil }
+                                        .buttonStyle(.bordered)
+                                }
+                                .padding(8)
+                                .background(Color(.systemBackground))
+                                .cornerRadius(10)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10).stroke(Color(.systemGray4), lineWidth: 1)
+                                )
+                            }
+
+                            if !customStartResults.isEmpty {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    ForEach(Array(customStartResults.prefix(6)), id: \.self) { item in
+                                        Button(action: {
+                                            customStartItem = item
+                                            customStartText = item.name ?? item.placemark.title ?? ""
+                                            customStartResults = []
+                                        }) {
+                                            HStack(alignment: .top, spacing: 8) {
+                                                Image(systemName: "mappin").foregroundColor(.red)
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text(item.name ?? "Place")
+                                                        .font(.system(size: 14, weight: .semibold))
+                                                    if let addr = item.placemark.title {
+                                                        Text(addr)
+                                                            .font(.system(size: 12))
+                                                            .foregroundColor(.secondary)
+                                                            .lineLimit(2)
+                                                    }
+                                                }
+                                                Spacer()
+                                            }
+                                            .padding(12)
+                                        }
+                                        .buttonStyle(.plain)
+                                        Divider()
+                                    }
+                                }
+                                .background(Color(.systemBackground))
+                                .cornerRadius(12)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12).stroke(Color(.systemGray4), lineWidth: 1)
+                                )
+                            }
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            Image(systemName: "location.circle.fill").foregroundColor(.blue)
+                            Text("Using your current location")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+
+                // Exercise preferences
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Exercise preferences")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.primary)
+
+                    HStack {
+                        Text("Type")
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Picker("Type", selection: $exerciseType) {
+                            Text("Walking").tag(HealthTransportType.walking)
+                            Text("Biking").tag(HealthTransportType.biking)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 240)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Time: \(Int(exerciseMinutes)) min")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                        Slider(value: $exerciseMinutes, in: 5...60, step: 5)
+                    }
+                }
+                .padding(.horizontal, 20)
                 
                 // Enhanced Get Healthy Alternatives Button
                 Button(action: {
@@ -160,7 +309,7 @@ struct HealthTripPlannerView: View {
                         y: 4
                     )
                 }
-                .disabled(healthTripService.isLoading)
+                .disabled(healthTripService.isLoading || !canRequest)
                 .scaleEffect(healthTripService.isLoading ? 0.98 : 1.0)
                 .animation(.easeInOut(duration: 0.1), value: healthTripService.isLoading)
                 .padding(.horizontal, 20)
@@ -289,22 +438,67 @@ struct HealthTripPlannerView: View {
     }
     
     private func requestHealthyAlternatives() {
-        guard let userLocation = locationManager.lastLocation else {
-            healthTripService.error = "Unable to get your current location"
-            return
+        let originCoord: CLLocationCoordinate2D
+        let originAddr: String?
+
+        switch originMode {
+        case .current:
+            guard let last = locationManager.lastLocation else {
+                healthTripService.error = "Unable to get your current location"
+                return
+            }
+            originCoord = last.coordinate
+            originAddr = nil
+        case .custom:
+            guard let item = customStartItem else {
+                healthTripService.error = "Please choose a start location"
+                return
+            }
+            originCoord = item.placemark.coordinate
+            originAddr = item.placemark.title
         }
-        
+
         Task {
             await healthTripService.requestHealthyAlternatives(
-                origin: userLocation.coordinate,
+                origin: originCoord,
                 destination: destination.placemark.coordinate,
-                originAddress: nil,
+                originAddress: originAddr,
                 destinationAddress: destination.placemark.title,
-                preferredTransport: transportSelection.selectedPreferredType
+                preferredTransport: transportSelection.selectedPreferredType,
+                exerciseMinutes: exerciseMinutes,
+                exerciseType: exerciseType
             )
-            
+
             if healthTripService.error == nil {
                 showingResults = true
+            }
+        }
+    }
+
+    private var canRequest: Bool {
+        if healthTripService.isLoading { return false }
+        if originMode == .custom { return customStartItem != nil }
+        return true
+    }
+
+    private func searchStartPlaces() {
+        guard originMode == .custom else { return }
+        let text = customStartText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            customStartResults = []
+            isSearchingStart = false
+            return
+        }
+        isSearchingStart = true
+        let req = MKLocalSearch.Request()
+        req.naturalLanguageQuery = text
+        if let last = locationManager.lastLocation {
+            req.region = MKCoordinateRegion(center: last.coordinate, latitudinalMeters: 15000, longitudinalMeters: 15000)
+        }
+        MKLocalSearch(request: req).start { resp, _ in
+            DispatchQueue.main.async {
+                self.isSearchingStart = false
+                self.customStartResults = resp?.mapItems ?? []
             }
         }
     }
