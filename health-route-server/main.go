@@ -57,9 +57,11 @@ type Graph struct {
 var (
 	carGraph  *Graph
 	walkGraph *Graph
+	bikeGraph *Graph
 
 	routingCarGraph  *routing.Graph
 	routingWalkGraph *routing.Graph
+	routingBikeGraph *routing.Graph
 )
 
 type LocationPoint struct {
@@ -101,6 +103,22 @@ type TripResponse struct {
 	RequestID          string        `json:"requestId"`
 }
 
+func loadGraphOptional(filename string) (*Graph, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	decoder := gob.NewDecoder(file)
+	var graph Graph
+	if err := decoder.Decode(&graph); err != nil {
+		return nil, err
+	}
+	log.Printf("Loaded graph from %s: %d nodes, %d edges", filename, len(graph.Nodes), len(graph.Edges))
+	return &graph, nil
+}
+
 func loadGraphs() error {
 	dataDir := "data"
 
@@ -114,6 +132,12 @@ func loadGraphs() error {
 	walkGraph, err = loadGraph(filepath.Join(dataDir, "walk_graph.gob"))
 	if err != nil {
 		return fmt.Errorf("failed to load walk graph: %v", err)
+	}
+
+	if g, err := loadGraphOptional(filepath.Join(dataDir, "bike_graph.gob")); err != nil {
+		log.Printf("WARNING: bike_graph.gob not loaded (%v); /route/car-bike will be unavailable", err)
+	} else {
+		bikeGraph = g
 	}
 
 	log.Println("Successfully loaded custom graphs for car and walk routing")
@@ -269,6 +293,61 @@ func handleTransitRoute(c *gin.Context) {
 	log.Println("=== Transit route request completed ===")
 }
 
+func handleCarBikeRoute(c *gin.Context) {
+	log.Println("=== Received car+bike route request ===")
+
+	var req routing.RouteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("ERROR: Failed to parse request: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.WalkDurationMins == 0 {
+		req.WalkDurationMins = 20 // reusing same field as a "bike" cap
+	}
+
+	if routingCarGraph == nil || routingBikeGraph == nil {
+		log.Println("ERROR: car or bike routing graph not initialized")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "car or bike routing graph not initialized (check bike_graph.gob)"})
+		return
+	}
+
+	start := routing.Coordinate{Lat: req.StartLat, Lon: req.StartLon}
+	end := routing.Coordinate{Lat: req.EndLat, Lon: req.EndLon}
+
+	steps := routing.PlanCarPlusLastBikeViaWalkGraph(start, end, routingWalkGraph, routingCarGraph, req.WalkDurationMins)
+	resp := routing.PrepareResponse(steps)
+	c.JSON(http.StatusOK, resp)
+}
+
+func handleTransitBikeRoute(c *gin.Context) {
+	log.Println("=== Received transit+bike route request ===")
+
+	var req routing.RouteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("ERROR: Failed to parse request: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.WalkDurationMins == 0 {
+		req.WalkDurationMins = 15
+	}
+
+	start := routing.Coordinate{Lat: req.StartLat, Lon: req.StartLon}
+	end := routing.Coordinate{Lat: req.EndLat, Lon: req.EndLon}
+
+	if routingWalkGraph == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "walk+subway routing graph not initialized"})
+		return
+	}
+
+	steps := routing.PlanSubwayPlusBikeViaWalkGraph(start, end, routingWalkGraph, req.WalkDurationMins)
+	resp := routing.PrepareResponse(steps)
+	c.JSON(http.StatusOK, resp)
+}
+
 func main() {
 
 	if err := godotenv.Load(); err != nil {
@@ -285,6 +364,10 @@ func main() {
 	log.Println("Converting graphs to routing format (one-time)...")
 	routingCarGraph = carGraph.toRoutingGraph()
 	routingWalkGraph = walkGraph.toRoutingGraph()
+	if bikeGraph != nil {
+		routingBikeGraph = bikeGraph.toRoutingGraph()
+		log.Printf("Cached routing bike graph ready. Bike nodes: %d", len(routingBikeGraph.Nodes))
+	}
 	log.Printf("Cached routing graphs ready. Car nodes: %d, Walk nodes: %d",
 		len(routingCarGraph.Nodes), len(routingWalkGraph.Nodes))
 
@@ -308,6 +391,9 @@ func main() {
 	r.POST("/route/transit", handleTransitRoute)
 
 	r.POST("/api/health-route", handleHealthRoute)
+
+	r.POST("/route/car-bike", handleCarBikeRoute)
+	r.POST("/route/transit-bike", handleTransitBikeRoute)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "healthy"})

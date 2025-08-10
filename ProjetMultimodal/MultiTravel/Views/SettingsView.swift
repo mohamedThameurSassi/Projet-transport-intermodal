@@ -6,10 +6,22 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var favoritesManager = FavoritesManager()
     @State private var showingAddFavorite = false
+    @AppStorage("walkingObjective") private var walkingObjective: Int = 30
     
     var body: some View {
         NavigationView {
             List {
+                // Walking Objective Section
+                Section("Walking Objective") {
+                    HStack {
+                        Text("Daily Goal")
+                        Spacer()
+                        Stepper("\(walkingObjective) min", value: $walkingObjective, in: 5...120, step: 5)
+                    }
+                    .accessibilityLabel("Set your daily walking goal in minutes")
+                }
+
+                // Favorites Section
                 Section("Favorites") {
                     if favoritesManager.favorites.isEmpty {
                         Text("No favorites yet")
@@ -21,7 +33,6 @@ struct SettingsView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(favorite.name)
                                         .font(.headline)
-                                    
                                     if let address = favorite.address, !address.isEmpty {
                                         Text(address)
                                             .font(.caption)
@@ -29,9 +40,7 @@ struct SettingsView: View {
                                             .lineLimit(2)
                                     }
                                 }
-                                
                                 Spacer()
-                                
                                 Button(action: {
                                     removeFavorite(favorite)
                                 }) {
@@ -42,7 +51,6 @@ struct SettingsView: View {
                             .padding(.vertical, 4)
                         }
                     }
-                    
                     Button(action: {
                         showingAddFavorite = true
                     }) {
@@ -53,21 +61,20 @@ struct SettingsView: View {
                         }
                     }
                 }
-                
+
+                // ...existing code...
                 Section("Map Preferences") {
                     HStack {
                         Text("Avoid Tolls")
                         Spacer()
                         Toggle("", isOn: .constant(false))
                     }
-                    
                     HStack {
                         Text("Avoid Highways")
                         Spacer()
                         Toggle("", isOn: .constant(false))
                     }
                 }
-                
                 Section("Voice & Sound") {
                     HStack {
                         Text("Voice Volume")
@@ -76,7 +83,6 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-                
                 Section("About") {
                     HStack {
                         Text("Version")

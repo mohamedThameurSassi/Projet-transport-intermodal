@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Route Viewer • Google Maps + Your Backend</title>
+  <style>
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+    header { padding: 10px 14px; border-bottom: 1px solid #e5e7eb; display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+    header .field { display: grid; gap: 4px; }
+    header label { font-size: 12px; color: #374151; }
+    header input, header select { padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 10px; min-width: 140px; }
+    header button { padding: 10px 14px; border-radius: 999px; border: 0; background: black; color: white; cursor: pointer; }
+    header button.secondary { background: #374151; }
+    #map { width: 100%; height: 100%; }
+    .legend { position: absolute; z-index: 5; right: 12px; top: 12px; background: white; padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); font-size: 12px; }
+    .legend-row { display: grid; grid-template-columns: 14px 1fr; align-items: center; gap: 8px; margin: 4px 0; }
+    .color { width: 14px; height: 4px; border-radius: 999px; }
+    .toast { position: absolute; left: 50%; transform: translateX(-50%); bottom: 16px; background: #111827; color: white; padding: 10px 14px; border-radius: 10px; display: none; }
+    .row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+  </style>
+  <!-- Replace YOUR_GOOGLE_MAPS_API_KEY with your key. Keep geometry lib for polyline decoding. -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyD7eELHLkMC0d3rClzEk8GkIw-nhFusI1Y&libraries=geometry"></script>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="row">
+        <div class="field">
+          <label>Backend URL</label>
+          <input id="backendUrl" value="http://localhost:8080" />
+        </div>
+        <div class="field">
+          <label>Endpoint</label>
+          <select id="endpoint">
+            <option value="/route/car-walk">/route/car-walk</option>
+            <option value="/route/transit">/route/transit</option>
+            <option value="/route/car-bike">/route/car-bike</option>
+            <option value="/route/transit-bike">/route/transit-bike</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Start (lat, lon)</label>
+          <input id="start" placeholder="45.5017,-73.5673" value="45.5017,-73.5673" />
+        </div>
+        <div class="field">
+          <label>End (lat, lon)</label>
+          <input id="end" placeholder="45.5088,-73.5878" value="45.5088,-73.5878" />
+        </div>
+        <div class="field">
+          <label>Walk / Bike Minutes</label>
+          <input id="walkMins" type="number" step="1" min="1" value="20" />
+        </div>
+        <div class="field">
+          <button id="goBtn">Get route</button>
+        </div>
+        <div class="field">
+          <button id="clearBtn" class="secondary">Clear</button>
+        </div>
+      </div>
+      <div class="row" style="font-size:12px;color:#4b5563;">
+        Tip: set GOOGLE_MAPS_API_KEY in your server env (for /route/transit) and replace the JS key above to render polylines.
+      </div>
+    </header>
+    <div id="map"></div>
+    <div class="legend" id="legend"></div>
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <script>
+    let map;
+    let overlays = [];
+
+    const MODE_COLORS = {
+      car: "#2563eb",
+      transit: "#7c3aed",
+      walk: "#10b981",
+      walk_to_transit: "#22c55e",
+      walk_from_transit: "#16a34a",
+      walk_final: "#059669",
+      bike: "#ea580c",
+      bike_to_transit: "#f97316",
+      bike_from_transit: "#fb923c",
+      bike_final: "#c2410c"
+    };
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg; el.style.display = 'block';
+      setTimeout(()=>{ el.style.display='none'; }, 2600);
+    }
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById('map'), {
+        center: { lat: 45.5017, lng: -73.5673 },
+        zoom: 13,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: false
+      });
+      buildLegend();
+    }
+
+    function buildLegend(){
+      const cont = document.getElementById('legend');
+      cont.innerHTML = '<b>Legend</b>';
+      Object.entries(MODE_COLORS).forEach(([mode, color]) => {
+        const row = document.createElement('div');
+        row.className = 'legend-row';
+        row.innerHTML = `<span class="color" style="background:${color}"></span><span>${mode}</span>`;
+        cont.appendChild(row);
+      });
+    }
+
+    function clearMap() {
+      overlays.forEach(o => o.setMap(null));
+      overlays = [];
+    }
+
+    function addMarker(pos, label) {
+      const m = new google.maps.Marker({ position: pos, map, label });
+      overlays.push(m);
+      return m;
+    }
+
+    function fitBoundsToOverlays() {
+      if (!overlays.length) return;
+      const b = new google.maps.LatLngBounds();
+      overlays.forEach(o => {
+        if (o.getPosition) b.extend(o.getPosition());
+        if (o.getPath) o.getPath().forEach(p => b.extend(p));
+      });
+      if (!b.isEmpty()) map.fitBounds(b);
+    }
+
+    function decodeAndDrawPolyline(points, color, title) {
+      try {
+        const path = google.maps.geometry.encoding.decodePath(points);
+        const pl = new google.maps.Polyline({ path, map, strokeColor: color, strokeOpacity: 1, strokeWeight: 5 });
+        pl.setMap(map);
+        pl.title = title;
+        overlays.push(pl);
+        return pl;
+      } catch (e) {
+        console.warn('Failed to decode polyline', e);
+      }
+    }
+
+    function drawSegment(step) {
+      const color = MODE_COLORS[step.Mode] || '#111827';
+      const from = { lat: step.FromCoord.Lat, lng: step.FromCoord.Lon };
+      const to   = { lat: step.ToCoord.Lat, lng: step.ToCoord.Lon };
+
+      // Prefer encoded polyline when present (e.g., Google Directions-backed steps)
+      if (step.Polyline && step.Polyline.length > 0) {
+        decodeAndDrawPolyline(step.Polyline, color, step.Description || step.Mode);
+      } else {
+        const pl = new google.maps.Polyline({ path: [from, to], strokeColor: color, strokeOpacity: 1, strokeWeight: 5 });
+        pl.setMap(map);
+        pl.title = step.Description || step.Mode;
+        overlays.push(pl);
+      }
+    }
+
+    async function fetchRoute() {
+      clearMap();
+      const backend = document.getElementById('backendUrl').value.replace(/\/$/, '');
+      const endpoint = document.getElementById('endpoint').value;
+      const start = document.getElementById('start').value.trim();
+      const end = document.getElementById('end').value.trim();
+      const walkMins = parseFloat(document.getElementById('walkMins').value) || 20;
+
+      const [sLat, sLon] = start.split(',').map(Number);
+      const [eLat, eLon] = end.split(',').map(Number);
+      if ([sLat, sLon, eLat, eLon].some(v => Number.isNaN(v))) {
+        showToast('Please enter valid coordinates like "45.5017,-73.5673"');
+        return;
+      }
+
+      // Markers
+      addMarker({lat: sLat, lng: sLon}, 'A');
+      addMarker({lat: eLat, lng: eLon}, 'B');
+
+      const payload = { startLat: sLat, startLon: sLon, endLat: eLat, endLon: eLon, walkDurationMins: walkMins };
+
+      try {
+        const res = await fetch(backend + endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(res.status + ' ' + t);
+        }
+        const data = await res.json();
+        // data may be either {steps: [...]} or the older shape — normalize
+        const steps = data.steps || data.Steps || [];
+        if (!Array.isArray(steps) || steps.length === 0) {
+          showToast('No steps returned.');
+          fitBoundsToOverlays();
+          return;
+        }
+        steps.forEach(drawSegment);
+        fitBoundsToOverlays();
+      } catch (err) {
+        console.error(err);
+        showToast('Failed: ' + err.message);
+      }
+    }
+
+    window.addEventListener('load', () => {
+      initMap();
+      document.getElementById('goBtn').addEventListener('click', fetchRoute);
+      document.getElementById('clearBtn').addEventListener('click', clearMap);
+    });
+  </script>
+</body>
+</html>

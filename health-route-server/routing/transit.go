@@ -217,8 +217,8 @@ func convertGoogleStep(googleStep GoogleStep) *RouteStep {
 			Lat: googleStep.EndLocation.Lat,
 			Lon: googleStep.EndLocation.Lng,
 		},
-		DurationSec: float64(googleStep.Duration.Value),
-		DistanceM:   float64(googleStep.Distance.Value),
+		DurationSec: float64(MustInt(googleStep.Duration.Value)),
+		DistanceM:   float64(MustInt(googleStep.Distance.Value)),
 	}
 
 	switch googleStep.TravelMode {
@@ -228,6 +228,13 @@ func convertGoogleStep(googleStep GoogleStep) *RouteStep {
 		step.Description = fmt.Sprintf("Walk %.1f km (%.0f min) - %s",
 			step.DistanceM/1000, step.DurationSec/60, instructions)
 		step.Polyline = ""
+
+	case "BICYCLING": // NEW: map Google bicycling to our bike mode
+		step.Mode = "bike"
+		instructions := stripHTMLTags(googleStep.Instructions)
+		step.Description = fmt.Sprintf("Bike %.1f km (%.0f min) - %s",
+			step.DistanceM/1000, step.DurationSec/60, instructions)
+		step.Polyline = googleStep.Polyline.Points
 
 	case "TRANSIT":
 		if googleStep.TransitDetails != nil {
@@ -294,6 +301,8 @@ func stripHTMLTags(html string) string {
 	result = strings.ReplaceAll(result, "&nbsp;", " ")
 	return result
 }
+
+func MustInt(v int) int { return v }
 
 func PlanTransitPlusWalk(
 	startCoord Coordinate,

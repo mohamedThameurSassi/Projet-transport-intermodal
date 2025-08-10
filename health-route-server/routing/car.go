@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 )
 
 const (
 	DEFAULT_WALK_SPEED_M_S   = 1.4
+	DEFAULT_BIKE_SPEED_M_S   = 4.5 // ~16.2 km/h typical urban cycling
 	DEFAULT_CAR_SPEED_M_S    = 13.9
 	DEFAULT_SUBWAY_SPEED_M_S = 8.3
 	EARTH_RADIUS_KM          = 6371.0
@@ -66,7 +68,7 @@ func findNearestNode(coord Coordinate, graph *Graph) (int64, float64) {
 	return nearestNode, minDistance
 }
 
-func findNodesWithinWalkingTime(graph *Graph, startNode int64, maxTime float64) map[int64]float64 {
+func findNodesWithinTime(graph *Graph, startNode int64, maxTime float64, defaultSpeedMS float64) map[int64]float64 {
 	distances := make(map[int64]float64)
 	visited := make(map[int64]bool)
 
@@ -74,8 +76,6 @@ func findNodesWithinWalkingTime(graph *Graph, startNode int64, maxTime float64) 
 	iterations := 0
 
 	distances[startNode] = 0
-
-	log.Printf("Finding nodes within %.0f seconds walking from node %d", maxTime, startNode)
 
 	for iterations < maxIterations {
 		iterations++
@@ -93,21 +93,16 @@ func findNodesWithinWalkingTime(graph *Graph, startNode int64, maxTime float64) 
 		}
 
 		if !found || minDist > maxTime {
-			log.Printf("Walking time search completed in %d iterations, found %d reachable nodes", iterations, len(distances))
 			break
 		}
 
 		visited[current] = true
 
-		if iterations%1000 == 0 {
-			log.Printf("Walking search iteration %d, current node: %d, distance: %.2f", iterations, current, minDist)
-		}
-
 		for _, edge := range graph.Edges[current] {
 			if !visited[edge.ToID] {
 				travelTime := edge.TravelTime
 				if travelTime <= 0 {
-					travelTime = edge.Distance / DEFAULT_WALK_SPEED_M_S
+					travelTime = edge.Distance / defaultSpeedMS
 				}
 
 				newDist := distances[current] + travelTime
@@ -120,11 +115,15 @@ func findNodesWithinWalkingTime(graph *Graph, startNode int64, maxTime float64) 
 		}
 	}
 
-	if iterations >= maxIterations {
-		log.Printf("WARNING: Walking time search hit maximum iterations limit (%d)", maxIterations)
-	}
-
 	return distances
+}
+
+func findNodesWithinWalkingTime(graph *Graph, startNode int64, maxTime float64) map[int64]float64 {
+	return findNodesWithinTime(graph, startNode, maxTime, DEFAULT_WALK_SPEED_M_S)
+}
+
+func findNodesWithinBikingTime(graph *Graph, startNode int64, maxTime float64) map[int64]float64 {
+	return findNodesWithinTime(graph, startNode, maxTime, DEFAULT_BIKE_SPEED_M_S)
 }
 
 type PriorityQueueItem struct {
@@ -187,6 +186,8 @@ func findShortestPathAStar(graph *Graph, startNode, endNode int64, mode string) 
 		speedMS = DEFAULT_CAR_SPEED_M_S
 	case "walk":
 		speedMS = DEFAULT_WALK_SPEED_M_S
+	case "bike":
+		speedMS = DEFAULT_BIKE_SPEED_M_S
 	case "subway", "multimodal":
 		speedMS = DEFAULT_WALK_SPEED_M_S
 	default:
@@ -322,6 +323,8 @@ func findShortestPath(graph *Graph, startNode, endNode int64, mode string) ([]in
 		speedMS = DEFAULT_CAR_SPEED_M_S
 	case "walk":
 		speedMS = DEFAULT_WALK_SPEED_M_S
+	case "bike":
+		speedMS = DEFAULT_BIKE_SPEED_M_S
 	default:
 		speedMS = DEFAULT_WALK_SPEED_M_S
 	}
@@ -517,64 +520,56 @@ func PlanCarPlusLastWalk(
 	return steps
 }
 
-func PlanSubwayPlusWalk(
+func PlanSubwayPlusBike(
 	startCoord Coordinate,
 	endCoord Coordinate,
-	walkSubwayGraph *Graph,
-	walkDurationMinutes float64,
+	bikeSubwayGraph *Graph,
+	bikeDurationMinutes float64,
 ) []RouteStep {
-	log.Printf("=== Starting PlanSubwayPlusWalk ===")
-	log.Printf("Start: (%.6f, %.6f), End: (%.6f, %.6f), Max walk: %.1f minutes",
-		startCoord.Lat, startCoord.Lon, endCoord.Lat, endCoord.Lon, walkDurationMinutes)
-	log.Printf("Walk+Subway graph: %d nodes, %d edge groups", len(walkSubwayGraph.Nodes), len(walkSubwayGraph.Edges))
+	log.Printf("=== Starting PlanSubwayPlusBike ===")
+	log.Printf("Start: (%.6f, %.6f), End: (%.6f, %.6f), Max bike: %.1f minutes",
+		startCoord.Lat, startCoord.Lon, endCoord.Lat, endCoord.Lon, bikeDurationMinutes)
+	log.Printf("Bike+Subway graph: %d nodes, %d edge groups", len(bikeSubwayGraph.Nodes), len(bikeSubwayGraph.Edges))
 
 	steps := make([]RouteStep, 0)
-	walkDurationSec := walkDurationMinutes * 60
+	bikeDurationSec := bikeDurationMinutes * 60
 
-	log.Printf("Step 1: Finding nearest start node...")
-	startNode, startDist := findNearestNode(startCoord, walkSubwayGraph)
-	log.Printf("Nearest start node: %d (%.2fm away)", startNode, startDist)
+	// 1) nearest start/end nodes on combined graph
+	startNode, startDist := findNearestNode(startCoord, bikeSubwayGraph)
+	endNode, _ := findNearestNode(endCoord, bikeSubwayGraph)
 
-	log.Printf("Step 2: Finding nearest end node...")
-	endNode, endDist := findNearestNode(endCoord, walkSubwayGraph)
-	log.Printf("Nearest end node: %d (%.2fm away)", endNode, endDist)
-
-	log.Printf("Step 3: Finding reachable nodes within %.0f seconds walking from start...", walkDurationSec)
-	startReachableNodes := findNodesWithinWalkingTime(walkSubwayGraph, startNode, walkDurationSec)
-	log.Printf("Found %d nodes reachable from start", len(startReachableNodes))
-
-	log.Printf("Step 4: Finding reachable nodes within %.0f seconds walking from destination...", walkDurationSec)
-	endReachableNodes := findNodesWithinWalkingTime(walkSubwayGraph, endNode, walkDurationSec)
-	log.Printf("Found %d nodes reachable from destination", len(endReachableNodes))
+	// 2) reachable by bike within cap from both ends
+	startReachableNodes := findNodesWithinBikingTime(bikeSubwayGraph, startNode, bikeDurationSec)
+	endReachableNodes := findNodesWithinBikingTime(bikeSubwayGraph, endNode, bikeDurationSec)
 
 	if len(startReachableNodes) == 0 || len(endReachableNodes) == 0 {
 		log.Printf("ERROR: Insufficient reachable nodes for complete route")
 		targetCoord := Coordinate{
-			Lat: walkSubwayGraph.Nodes[startNode].Latitude,
-			Lon: walkSubwayGraph.Nodes[startNode].Longitude,
+			Lat: bikeSubwayGraph.Nodes[startNode].Latitude,
+			Lon: bikeSubwayGraph.Nodes[startNode].Longitude,
 		}
 		steps = append(steps, RouteStep{
-			Mode:        "walk_to_transit",
+			Mode:        "bike_to_transit",
 			FromCoord:   startCoord,
 			ToCoord:     targetCoord,
-			DurationSec: startDist / 1.4,
+			DurationSec: startDist / DEFAULT_BIKE_SPEED_M_S,
 			DistanceM:   startDist,
-			Description: "Walk to nearest subway station",
+			Description: "Bike to nearest subway station",
 			Error:       "Limited routing data available",
 		})
 		return steps
 	}
 
-	log.Printf("Step 5: Finding best start station within walking distance...")
+	// 3) select start station (min distance to destination heuristic)
 	var bestStartStation int64
 	bestDistanceToDestination := math.Inf(1)
-	var bestWalkToStationTime, bestWalkToStationDist float64
+	var bestBikeToStationTime, bestBikeToStationDist float64
 
-	for startStationID, walkTimeToStation := range startReachableNodes {
-		if walkTimeToStation <= walkDurationSec {
+	for startStationID, bikeTimeToStation := range startReachableNodes {
+		if bikeTimeToStation <= bikeDurationSec {
 			startStationCoord := Coordinate{
-				Lat: walkSubwayGraph.Nodes[startStationID].Latitude,
-				Lon: walkSubwayGraph.Nodes[startStationID].Longitude,
+				Lat: bikeSubwayGraph.Nodes[startStationID].Latitude,
+				Lon: bikeSubwayGraph.Nodes[startStationID].Longitude,
 			}
 
 			distanceToDestination := haversineDistance(startStationCoord, endCoord)
@@ -582,85 +577,74 @@ func PlanSubwayPlusWalk(
 			if distanceToDestination < bestDistanceToDestination {
 				bestDistanceToDestination = distanceToDestination
 				bestStartStation = startStationID
-				bestWalkToStationTime = walkTimeToStation
+				bestBikeToStationTime = bikeTimeToStation
 
-				_, _, walkToStationDist := findShortestPathAStar(walkSubwayGraph, startNode, startStationID, "walk")
-				bestWalkToStationDist = walkToStationDist
+				_, _, bikeToStationDist := findShortestPathAStar(bikeSubwayGraph, startNode, startStationID, "bike")
+				bestBikeToStationDist = bikeToStationDist
 			}
 		}
 	}
 
 	if bestStartStation == 0 {
-		log.Printf("ERROR: No start station found within walking time constraint")
+		log.Printf("ERROR: No start station found within biking time constraint")
 		return steps
 	}
 
-	log.Printf("Best start station: %d (%.2fm from destination, %.2fs walk)",
-		bestStartStation, bestDistanceToDestination, bestWalkToStationTime)
-
-	log.Printf("Step 6: Finding best end station within walking distance from destination...")
+	// 4) select end station (min total time)
 	var bestEndStation int64
 	bestTotalRouteTime := math.Inf(1)
-	var bestWalkFromStationTime, bestWalkFromStationDist float64
+	var bestBikeFromStationTime, bestBikeFromStationDist float64
 
 	startStationCoord := Coordinate{
-		Lat: walkSubwayGraph.Nodes[bestStartStation].Latitude,
-		Lon: walkSubwayGraph.Nodes[bestStartStation].Longitude,
+		Lat: bikeSubwayGraph.Nodes[bestStartStation].Latitude,
+		Lon: bikeSubwayGraph.Nodes[bestStartStation].Longitude,
 	}
 
-	for endStationID, walkTimeFromStation := range endReachableNodes {
-		if walkTimeFromStation <= walkDurationSec && endStationID != bestStartStation {
+	for endStationID, bikeTimeFromStation := range endReachableNodes {
+		if bikeTimeFromStation <= bikeDurationSec && endStationID != bestStartStation {
 			endStationCoord := Coordinate{
-				Lat: walkSubwayGraph.Nodes[endStationID].Latitude,
-				Lon: walkSubwayGraph.Nodes[endStationID].Longitude,
+				Lat: bikeSubwayGraph.Nodes[endStationID].Latitude,
+				Lon: bikeSubwayGraph.Nodes[endStationID].Longitude,
 			}
 
 			subwayDistance := haversineDistance(startStationCoord, endStationCoord)
 			subwayTime := subwayDistance / (40.0 / 3.6)
 
-			totalRouteTime := bestWalkToStationTime + subwayTime + walkTimeFromStation
+			totalRouteTime := bestBikeToStationTime + subwayTime + bikeTimeFromStation
 
 			if totalRouteTime < bestTotalRouteTime {
 				bestTotalRouteTime = totalRouteTime
 				bestEndStation = endStationID
-				bestWalkFromStationTime = walkTimeFromStation
+				bestBikeFromStationTime = bikeTimeFromStation
 
-				_, _, walkFromStationDist := findShortestPathAStar(walkSubwayGraph, endStationID, endNode, "walk")
-				bestWalkFromStationDist = walkFromStationDist
+				_, _, bikeFromStationDist := findShortestPathAStar(bikeSubwayGraph, endStationID, endNode, "bike")
+				bestBikeFromStationDist = bikeFromStationDist
 			}
 		}
 	}
 
 	if bestStartStation == 0 || bestEndStation == 0 {
-		log.Printf("ERROR: No valid station pair found within walking constraints")
+		log.Printf("ERROR: No valid station pair found within biking constraints")
 		log.Printf("Start station: %d, End station: %d", bestStartStation, bestEndStation)
 		return steps
 	}
 
 	startStationCoord = Coordinate{
-		Lat: walkSubwayGraph.Nodes[bestStartStation].Latitude,
-		Lon: walkSubwayGraph.Nodes[bestStartStation].Longitude,
+		Lat: bikeSubwayGraph.Nodes[bestStartStation].Latitude,
+		Lon: bikeSubwayGraph.Nodes[bestStartStation].Longitude,
 	}
 	endStationCoord := Coordinate{
-		Lat: walkSubwayGraph.Nodes[bestEndStation].Latitude,
-		Lon: walkSubwayGraph.Nodes[bestEndStation].Longitude,
+		Lat: bikeSubwayGraph.Nodes[bestEndStation].Latitude,
+		Lon: bikeSubwayGraph.Nodes[bestEndStation].Longitude,
 	}
 
-	log.Printf("Final route: Start station %d, End station %d", bestStartStation, bestEndStation)
-	log.Printf("Walk to station: %.1f min (%.2fm), Walk from station: %.1f min (%.2fm)",
-		bestWalkToStationTime/60, bestWalkToStationDist, bestWalkFromStationTime/60, bestWalkFromStationDist)
-	log.Printf("Walking times are within %.1f minute constraint: %v, %v",
-		walkDurationMinutes,
-		bestWalkToStationTime <= walkDurationSec,
-		bestWalkFromStationTime <= walkDurationSec)
-
 	steps = append(steps, RouteStep{
-		Mode:        "walk_to_transit",
+		Mode:        "bike_to_transit",
 		FromCoord:   startCoord,
 		ToCoord:     startStationCoord,
-		DurationSec: bestWalkToStationTime,
-		DistanceM:   bestWalkToStationDist,
-		Description: fmt.Sprintf("Walk to subway station (%.1f min)", bestWalkToStationTime/60),
+		DurationSec: bestBikeToStationTime,
+		DistanceM:   bestBikeToStationDist,
+		Description: fmt.Sprintf("Bike to subway station (%.1f min)", bestBikeToStationTime/60),
 	})
 
 	subwayDistance := haversineDistance(startStationCoord, endStationCoord)
@@ -676,16 +660,137 @@ func PlanSubwayPlusWalk(
 	})
 
 	steps = append(steps, RouteStep{
-		Mode:        "walk_from_transit",
+		Mode:        "bike_from_transit",
 		FromCoord:   endStationCoord,
 		ToCoord:     endCoord,
-		DurationSec: bestWalkFromStationTime,
-		DistanceM:   bestWalkFromStationDist,
-		Description: fmt.Sprintf("Walk to destination (%.1f min)", bestWalkFromStationTime/60),
+		DurationSec: bestBikeFromStationTime,
+		DistanceM:   bestBikeFromStationDist,
+		Description: fmt.Sprintf("Bike to destination (%.1f min)", bestBikeFromStationTime/60),
 	})
 
-	log.Printf("=== PlanSubwayPlusWalk completed with %d steps ===", len(steps))
-	log.Printf("Total walking time: %.1f min (constraint: %.1f min)",
-		(bestWalkToStationTime+bestWalkFromStationTime)/60, walkDurationMinutes)
+	log.Printf("=== PlanSubwayPlusBike completed with %d steps ===", len(steps))
+	log.Printf("Total biking time: %.1f min (constraint: %.1f min)",
+		(bestBikeToStationTime+bestBikeFromStationTime)/60, bikeDurationMinutes)
 	return steps
+}
+
+func rewriteWalkStepsToBike(steps []RouteStep) []RouteStep {
+	out := make([]RouteStep, 0, len(steps))
+	for _, s := range steps {
+		switch s.Mode {
+		case "walk_final":
+			s.Mode = "bike_final"
+			if s.DistanceM > 0 {
+				s.DurationSec = s.DistanceM / DEFAULT_BIKE_SPEED_M_S
+			}
+			if s.Description != "" {
+				s.Description = strings.Replace(s.Description, "Walk", "Bike", 1)
+			}
+		case "walk_to_transit":
+			s.Mode = "bike_to_transit"
+			if s.DistanceM > 0 {
+				s.DurationSec = s.DistanceM / DEFAULT_BIKE_SPEED_M_S
+			}
+			if s.Description != "" {
+				s.Description = strings.Replace(s.Description, "Walk", "Bike", 1)
+			}
+		case "walk_from_transit":
+			s.Mode = "bike_from_transit"
+			if s.DistanceM > 0 {
+				s.DurationSec = s.DistanceM / DEFAULT_BIKE_SPEED_M_S
+			}
+			if s.Description != "" {
+				s.Description = strings.Replace(s.Description, "Walk", "Bike", 1)
+			}
+		case "walk":
+			s.Mode = "bike"
+			if s.DistanceM > 0 {
+				s.DurationSec = s.DistanceM / DEFAULT_BIKE_SPEED_M_S
+			}
+			if s.Description != "" {
+				s.Description = strings.Replace(s.Description, "Walk", "Bike", 1)
+			}
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func PlanCarPlusLastBikeViaWalkGraph(
+	startCoord Coordinate,
+	endCoord Coordinate,
+	walkGraph *Graph,
+	carGraph *Graph,
+	bikeDurationMinutes float64,
+) []RouteStep {
+	log.Printf("=== PlanCarPlusLastBikeViaWalkGraph ===")
+	factor := DEFAULT_BIKE_SPEED_M_S / DEFAULT_WALK_SPEED_M_S
+	walkEqMins := bikeDurationMinutes * factor
+
+	steps := PlanCarPlusLastWalk(startCoord, endCoord, walkGraph, carGraph, walkEqMins)
+
+	return rewriteWalkStepsToBike(steps)
+}
+
+func PlanSubwayPlusBikeViaWalkGraph(
+	startCoord Coordinate,
+	endCoord Coordinate,
+	walkSubwayGraph *Graph,
+	bikeDurationMinutes float64,
+) []RouteStep {
+	log.Printf("=== PlanSubwayPlusBikeViaWalkGraph ===")
+	factor := DEFAULT_BIKE_SPEED_M_S / DEFAULT_WALK_SPEED_M_S // ≈ 3.2 (or 3.98 if 20 km/h)
+	walkEqMins := bikeDurationMinutes * factor                // e.g. 30 bike min -> 120 walk min
+
+	// IMPORTANT: use the graph-based function that respects maxWalkMinutes
+	steps, err := PlanTransitEarlierStopPlusWalk(startCoord, endCoord, walkEqMins, walkSubwayGraph)
+	if err != nil {
+		log.Printf("PlanTransitEarlierStopPlusWalk failed: %v", err)
+		return nil
+	}
+
+	// Now convert the walk legs to bike and divide durations by the same factor
+	return rewriteWalkStepsToBikeWithFactor(steps, factor)
+}
+
+func rewriteWalkStepsToBikeWithFactor(steps []RouteStep, factor float64) []RouteStep {
+	out := make([]RouteStep, 0, len(steps))
+	for _, s := range steps {
+		switch s.Mode {
+		case "walk_final":
+			s.Mode = "bike_final"
+			if s.DurationSec > 0 {
+				s.DurationSec = s.DurationSec / factor
+			}
+			if s.Description != "" {
+				s.Description = strings.Replace(s.Description, "Walk", "Bike", 1)
+			}
+		case "walk_to_transit":
+			s.Mode = "bike_to_transit"
+			if s.DurationSec > 0 {
+				s.DurationSec = s.DurationSec / factor
+			}
+			if s.Description != "" {
+				s.Description = strings.Replace(s.Description, "Walk", "Bike", 1)
+			}
+		case "walk_from_transit":
+			s.Mode = "bike_from_transit"
+			if s.DurationSec > 0 {
+				s.DurationSec = s.DurationSec / factor
+			}
+			if s.Description != "" {
+				s.Description = strings.Replace(s.Description, "Walk", "Bike", 1)
+			}
+		case "walk":
+			s.Mode = "bike"
+			if s.DurationSec > 0 {
+				s.DurationSec = s.DurationSec / factor
+			}
+			if s.Description != "" {
+				s.Description = strings.Replace(s.Description, "Walk", "Bike", 1)
+			}
+		}
+		out = append(out, s)
+	}
+	return out
 }

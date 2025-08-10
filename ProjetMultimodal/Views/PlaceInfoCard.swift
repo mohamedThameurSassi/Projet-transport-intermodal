@@ -64,36 +64,7 @@ struct PlaceInfoCard: View {
                 }
                 .disabled(isStartingNavigation)
                 
-                // Secondary options row
-                HStack(spacing: 8) {
-                    Button(action: onDirections) {
-                        HStack {
-                            Image(systemName: "arrow.triangle.turn.up.right.diamond")
-                                .font(.system(size: 12, weight: .medium))
-                            Text("Plan")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color.gray.opacity(0.2))
-                        .foregroundColor(.primary)
-                        .cornerRadius(6)
-                    }
-                    
-                    Button(action: onCarWalkDirections) {
-                        HStack {
-                            Image(systemName: "figure.walk")
-                                .font(.system(size: 12, weight: .medium))
-                            Text("Park & Walk")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color.gray.opacity(0.2))
-                        .foregroundColor(.primary)
-                        .cornerRadius(6)
-                    }
-                }
+                
             }
         }
         .padding()

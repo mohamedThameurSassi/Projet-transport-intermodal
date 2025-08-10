@@ -28,7 +28,6 @@ type RouteResponse struct {
 func PrepareResponse(steps []RouteStep) RouteResponse {
 	resp := RouteResponse{Steps: steps}
 
-	// Determine first car or transit start
 	for _, step := range steps {
 		if step.Mode == "car" || step.Mode == "transit" {
 			resp.CarOrTransitStart = step.FromCoord

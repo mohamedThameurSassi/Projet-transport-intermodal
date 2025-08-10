@@ -4,7 +4,7 @@ import SwiftUI
 struct MultiTravelApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            WelcomeView()
         }
     }
 }
