@@ -14,7 +14,6 @@ struct HealthTripPlannerView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Enhanced Header
                 HStack {
                     Button("Cancel") {
                         presentationMode.wrappedValue.dismiss()
@@ -36,7 +35,6 @@ struct HealthTripPlannerView: View {
                     
                     Spacer()
                     
-                    // Invisible button for balance
                     Button("Cancel") {
                         presentationMode.wrappedValue.dismiss()
                     }
@@ -197,7 +195,7 @@ struct HealthTripPlannerView: View {
                         // Your Usual Route Section
                         VStack(alignment: .leading, spacing: 16) {
                             HStack {
-                                Image(systemName: "car.fill")
+                                Image(systemName: response.originalRoute.segments.first?.transportType.icon ?? "car.fill")
                                     .font(.system(size: 16, weight: .medium))
                                     .foregroundColor(.blue)
                                 
@@ -388,7 +386,7 @@ extension PreferredTransportType {
     var description: String {
         switch self {
         case .car: return "Personal vehicle, door-to-door convenience"
-        case .gtfs: return "Public transit, eco-friendly option"
+    case .gtfs: return "Public transit, eco-friendly option"
         }
     }
 }
@@ -470,7 +468,7 @@ struct EnhancedRouteOptionRow: View {
                 HStack(spacing: 0) {
                     StatCard(
                         icon: "clock.fill",
-                        value: "\(Int(route.totalDuration / 60)) min",
+                        value: safeMinutes(route.totalDuration),
                         color: .blue
                     )
                     
@@ -482,13 +480,13 @@ struct EnhancedRouteOptionRow: View {
                     
                     StatCard(
                         icon: "leaf.fill",
-                        value: String(format: "%.1f kg", route.carbonFootprint),
+                        value: safeKg(route.carbonFootprint),
                         color: .green
                     )
                     
                     StatCard(
                         icon: "ruler.fill",
-                        value: String(format: "%.1f km", route.totalDistance / 1000),
+                        value: safeKm(route.totalDistance),
                         color: .purple
                     )
                 }
@@ -558,4 +556,21 @@ struct StatCard: View {
         }
         .frame(maxWidth: .infinity)
     }
+}
+
+// MARK: - Safe formatters to avoid NaN/Inf in UI
+private func safeMinutes(_ seconds: TimeInterval) -> String {
+    guard seconds.isFinite && !seconds.isNaN else { return "– min" }
+    let mins = max(0, Int(seconds / 60))
+    return "\(mins) min"
+}
+
+private func safeKm(_ meters: Double) -> String {
+    guard meters.isFinite && !meters.isNaN else { return "– km" }
+    return String(format: "%.1f km", meters / 1000.0)
+}
+
+private func safeKg(_ kg: Double) -> String {
+    guard kg.isFinite && !kg.isNaN else { return "– kg" }
+    return String(format: "%.1f kg", kg)
 }

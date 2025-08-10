@@ -2,11 +2,7 @@ import SwiftUI
 import MapKit
 
 struct ContentView: View {
-    @StateObject private var locationManager = Locatio                    }
-                    
-                    Button(action: {
-                        showingSettings = true
-                    }) {er()
+    @StateObject private var locationManager = LocationManager()
     @StateObject private var favoritesManager = FavoritesManager()
     @State private var searchText = ""
     @State private var selectedMapType: MKMapType = .standard
@@ -18,10 +14,16 @@ struct ContentView: View {
     @State private var currentRoute: MKRoute?
     @State private var showingSettings = false
     @State private var userTrackingMode: MKUserTrackingMode = .none
+    @State private var isStartingNavigation = false
     
     // Car+Walk routing support
     @State private var showingCarWalkPlanner = false
     @State private var currentCarWalkRoute: CarWalkRouteResponse?
+
+    // Health route follow mode
+    @State private var selectedHealthRoute: TripResponse.RouteOption?
+    @State private var healthOverlays: [HealthSegmentOverlay] = []
+    @State private var activeHealthSegmentIndex: Int? = nil
     
     @State private var searchCompleter = MKLocalSearchCompleter()
     @State private var searchSuggestions: [MKLocalSearchCompletion] = []
@@ -31,13 +33,15 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            if currentCarWalkRoute != nil {
+        if currentCarWalkRoute != nil || !healthOverlays.isEmpty {
                 EnhancedMapViewContainer(
                     locationManager: locationManager,
                     mapType: selectedMapType,
                     searchResults: searchResults,
                     selectedPlace: selectedPlace,
                     carWalkRoute: currentCarWalkRoute,
+                    healthOverlays: healthOverlays.isEmpty ? nil : healthOverlays,
+                    activeHealthSegmentIndex: activeHealthSegmentIndex,
                     userTrackingMode: $userTrackingMode
                 )
                 .edgesIgnoringSafeArea(.all)
@@ -68,7 +72,11 @@ struct ContentView: View {
                                 searchForPlaces()
                             }
                             .onTapGesture {
-                                if !favoritesManager.favorites.isEmpty {
+                                // If we have a selected place, clear it when user taps search field
+                                if selectedPlace != nil {
+                                    selectedPlace = nil
+                                    searchText = ""
+                                } else if !favoritesManager.favorites.isEmpty {
                                     showingFavorites = true
                                     showingSearchResults = false
                                 }
@@ -79,20 +87,20 @@ struct ContentView: View {
                                     showingFavorites = false
                                     searchResults = []
                                     searchSuggestions = []
+                                    selectedPlace = nil
                                 } else {
-                                    // Update search completer query
-                                    searchCompleter.queryFragment = newValue
+                                    // Only update search completer if we don't have a selected place
+                                    // This prevents the completer from running when we set searchText programmatically
+                                    if selectedPlace == nil {
+                                        searchCompleter.queryFragment = newValue
+                                    }
                                 }
                             }
                         
                         if !searchText.isEmpty {
                             Button(action: {
                                 withAnimation(.easeInOut(duration: 0.2)) {
-                                    searchText = ""
-                                    searchResults = []
-                                    selectedPlace = nil
-                                    showingSearchResults = false
-                                    showingFavorites = false
+                                    clearSearch()
                                 }
                             }) {
                                 Image(systemName: "xmark.circle.fill")
@@ -248,7 +256,7 @@ struct ContentView: View {
             }
             
             // Enhanced Search Results and Suggestions
-            if (showingSearchResults && !searchResults.isEmpty) || (!searchSuggestions.isEmpty && !searchText.isEmpty) {
+            if (showingSearchResults && !searchResults.isEmpty && selectedPlace == nil) || (!searchSuggestions.isEmpty && !searchText.isEmpty && selectedPlace == nil) {
                 VStack {
                     Spacer()
                     
@@ -256,7 +264,7 @@ struct ContentView: View {
                         // Results Header
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                if !searchSuggestions.isEmpty && !searchText.isEmpty {
+                                if !searchSuggestions.isEmpty && !searchText.isEmpty && searchResults.isEmpty {
                                     Text("Search Suggestions")
                                         .font(.system(size: 18, weight: .semibold))
                                         .foregroundColor(.primary)
@@ -298,8 +306,8 @@ struct ContentView: View {
                         // Results List
                         ScrollView {
                             LazyVStack(spacing: 12) {
-                                // Show suggestions when typing
-                                if !searchSuggestions.isEmpty && !searchText.isEmpty {
+                                // Show suggestions when typing (but not when we have search results)
+                                if !searchSuggestions.isEmpty && !searchText.isEmpty && searchResults.isEmpty {
                                     ForEach(searchSuggestions, id: \.title) { suggestion in
                                         SearchSuggestionRow(suggestion: suggestion) {
                                             selectSuggestion(suggestion)
@@ -308,15 +316,18 @@ struct ContentView: View {
                                     }
                                 }
                                 
-                                // Show search results
+                                // Show search results (takes priority over suggestions)
                                 ForEach(searchResults, id: \.self) { item in
                                     SearchResultRow(item: item) {
                                         withAnimation(.easeInOut(duration: 0.3)) {
+                                            // Set selected place first to prevent onChange issues
                                             selectedPlace = item
+                                            searchText = item.name ?? ""
+                                            // Clear all overlays and suggestions
                                             showingSearchResults = false
                                             showingFavorites = false
-                                            searchText = item.name ?? ""
                                             searchSuggestions = []
+                                            searchResults = []
                                         }
                                     }
                                     .padding(.horizontal, 16)
@@ -341,16 +352,17 @@ struct ContentView: View {
                 }
             }
             
-            if let place = selectedPlace, !showingSearchResults && !showingFavorites {
+            if let place = selectedPlace, !showingSearchResults && !showingFavorites && selectedHealthRoute == nil && currentCarWalkRoute == nil {
                 VStack {
                     Spacer()
                     
-                    PlaceInfoCard(
+                    PlaceInfoActionCard(
                         place: place,
                         onClose: {
                             selectedPlace = nil
                             currentRoute = nil
                             currentCarWalkRoute = nil
+                            clearHealthFollow()
                         },
                         onDirections: {
                             showingDirections = true
@@ -361,11 +373,50 @@ struct ContentView: View {
                         onFavoriteToggle: {
                             favoritesManager.toggleFavorite(place)
                         },
-                        isFavorite: favoritesManager.isFavorite(place)
+                        isFavorite: favoritesManager.isFavorite(place),
+                        onGo: {
+                            // Quick start navigation: open planner immediately
+                            isStartingNavigation = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                showingDirections = true
+                                isStartingNavigation = false
+                            }
+                        },
+                        isStartingNavigation: isStartingNavigation
                     )
                     .padding(.horizontal)
                     .padding(.bottom, 50)
                 }
+            }
+
+            // Follow UI overlays
+            if let route = selectedHealthRoute, let idx = activeHealthSegmentIndex, route.segments.indices.contains(idx) {
+                VStack {
+                    Spacer()
+                    TripFollowBar(
+                        route: route,
+                        activeIndex: idx,
+                        onPrev: { moveToPrevSegment() },
+                        onNext: { moveToNextSegment() },
+                        onExit: { clearHealthFollow() }
+                    )
+                }
+                .padding(.bottom, 10)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.25), value: activeHealthSegmentIndex)
+
+                // Optional top HUD with instruction for current segment
+                VStack {
+                    NavigationHUD(
+                        segment: route.segments[idx],
+                        index: idx,
+                        total: route.segments.count,
+                        onEnd: { clearHealthFollow() }
+                    )
+                    Spacer()
+                }
+                .padding(.top, 12)
+                .transition(.opacity)
             }
         }
         .sheet(isPresented: $showingDirections) {
@@ -375,7 +426,13 @@ struct ContentView: View {
                     locationManager: locationManager
                 ) { route in
                     currentRoute = route
+                    currentCarWalkRoute = nil
                     showingDirections = false
+                } onHealthRouteSelected: { option in
+                    // Enter follow mode for health route
+                    Task {
+                        await startHealthFollow(with: option)
+                    }
                 }
             }
         }
@@ -390,6 +447,9 @@ struct ContentView: View {
                 ) { carWalkRoute in
                     currentCarWalkRoute = carWalkRoute
                     currentRoute = nil // Clear any existing standard route
+                    selectedHealthRoute = nil
+                    healthOverlays = []
+                    activeHealthSegmentIndex = nil
                     showingCarWalkPlanner = false
                 }
             }
@@ -403,6 +463,45 @@ struct ContentView: View {
             // Setup search completion
             setupSearchCompleter()
         }
+    }
+
+    // MARK: - Follow mode helpers
+    private func startHealthFollow(with option: TripResponse.RouteOption) async {
+        // Clear other route states
+        currentRoute = nil
+        currentCarWalkRoute = nil
+        selectedPlace = nil
+        
+        // Compute MKRoute polylines for each segment
+        let mkRoutes = await HealthTripService().computeMKRoutes(for: option)
+        
+        await MainActor.run {
+            self.selectedHealthRoute = option
+            self.healthOverlays = mkRoutes.enumerated().map { idx, route in
+                HealthSegmentOverlay(
+                    polyline: route.polyline,
+                    mode: option.segments[idx].transportType
+                )
+            }
+            self.activeHealthSegmentIndex = healthOverlays.isEmpty ? nil : 0
+            self.showingDirections = false
+        }
+    }
+    private func moveToPrevSegment() {
+        guard var idx = activeHealthSegmentIndex else { return }
+        idx = max(0, idx - 1)
+        activeHealthSegmentIndex = idx
+    }
+    private func moveToNextSegment() {
+        guard let route = selectedHealthRoute, var idx = activeHealthSegmentIndex else { return }
+        let maxIndex = route.segments.count - 1
+        idx = min(maxIndex, idx + 1)
+        activeHealthSegmentIndex = idx
+    }
+    private func clearHealthFollow() {
+        selectedHealthRoute = nil
+        healthOverlays = []
+        activeHealthSegmentIndex = nil
     }
     
     private func searchForPlaces() {
@@ -517,10 +616,17 @@ struct ContentView: View {
     // MARK: - Helper Methods
     private func setupSearchCompleter() {
         completerDelegate = SearchCompleterDelegate { suggestions in
-            self.searchSuggestions = suggestions
+            DispatchQueue.main.async {
+                // Only update suggestions if we don't have a selected place
+                // This prevents suggestions from appearing when we've already selected something
+                if self.selectedPlace == nil {
+                    self.searchSuggestions = suggestions
+                }
+            }
         }
         searchCompleter.delegate = completerDelegate
         searchCompleter.region = locationManager.region
+        searchCompleter.resultTypes = [.address, .pointOfInterest]
     }
     
     private func filterPOI(_ category: MKPointOfInterestCategory) {
@@ -555,9 +661,32 @@ struct ContentView: View {
     }
     
     private func selectSuggestion(_ suggestion: MKLocalSearchCompletion) {
-        searchText = suggestion.title
+        // Clear suggestions immediately to prevent UI glitches
         searchSuggestions = []
-        searchForPlaces()
+        showingFavorites = false
+        showingSearchResults = false
+
+        let request = MKLocalSearch.Request(completion: suggestion)
+        request.region = locationManager.region
+        let search = MKLocalSearch(request: request)
+        search.start { response, error in
+            DispatchQueue.main.async {
+                if let item = response?.mapItems.first {
+                    // Set the selected place first, then update searchText
+                    // This prevents the onChange from triggering the completer
+                    self.selectedPlace = item
+                    self.searchText = item.name ?? suggestion.title
+                    // Ensure all overlays are hidden
+                    self.searchResults = []
+                    self.showingSearchResults = false
+                    self.searchSuggestions = []
+                } else {
+                    // Fallback: run a normal text search
+                    self.searchText = suggestion.title
+                    self.searchForPlaces()
+                }
+            }
+        }
     }
     
     private func clearSearch() {
@@ -565,8 +694,10 @@ struct ContentView: View {
         searchResults = []
         searchSuggestions = []
         showingSearchResults = false
+        showingFavorites = false
         selectedPOICategory = nil
         poiResults = []
+        selectedPlace = nil
     }
 }
 

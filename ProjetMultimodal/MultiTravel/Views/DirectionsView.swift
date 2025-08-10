@@ -6,6 +6,7 @@ struct DirectionsView: View {
     let destination: MKMapItem
     let locationManager: LocationManager
     let onRouteCalculated: (MKRoute) -> Void
+    var onHealthRouteSelected: ((TripResponse.RouteOption) -> Void)? = nil
     
     @Environment(\.presentationMode) var presentationMode
     
@@ -14,8 +15,7 @@ struct DirectionsView: View {
             destination: destination,
             locationManager: locationManager
         ) { routeOption in
-            // For legacy compatibility, we'll just dismiss
-            // In a full implementation, you'd convert the route option to MKRoute
+            onHealthRouteSelected?(routeOption)
             presentationMode.wrappedValue.dismiss()
         }
     }

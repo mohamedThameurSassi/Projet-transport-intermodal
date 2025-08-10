@@ -9,11 +9,23 @@ class SearchCompleterDelegate: NSObject, MKLocalSearchCompleterDelegate {
     }
     
     func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
-        onUpdate(completer.results)
+        if Thread.isMainThread {
+            onUpdate(completer.results)
+        } else {
+            DispatchQueue.main.async {
+                self.onUpdate(completer.results)
+            }
+        }
     }
     
     func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
         print("Search completer error: \(error.localizedDescription)")
-        onUpdate([])
+        if Thread.isMainThread {
+            onUpdate([])
+        } else {
+            DispatchQueue.main.async {
+                self.onUpdate([])
+            }
+        }
     }
 }

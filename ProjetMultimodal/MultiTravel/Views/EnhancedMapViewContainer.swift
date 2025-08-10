@@ -1,13 +1,14 @@
 import SwiftUI
 import MapKit
 
-// MARK: - Enhanced Map View Container with Multi-Modal Route Support
 struct EnhancedMapViewContainer: UIViewRepresentable {
     let locationManager: LocationManager
     let mapType: MKMapType
     let searchResults: [MKMapItem]
     let selectedPlace: MKMapItem?
     let carWalkRoute: CarWalkRouteResponse?
+    let healthOverlays: [HealthSegmentOverlay]?
+    let activeHealthSegmentIndex: Int?
     @Binding var userTrackingMode: MKUserTrackingMode
     
     // Zoom level constants
@@ -92,6 +93,21 @@ struct EnhancedMapViewContainer: UIViewRepresentable {
         if let carWalkRoute = carWalkRoute {
             addCarWalkRouteToMap(uiView, route: carWalkRoute)
         }
+
+        // Add health route overlays if available
+        if let healthOverlays = healthOverlays, !healthOverlays.isEmpty {
+            addHealthRouteToMap(uiView, overlays: healthOverlays)
+
+            // If we're following a specific segment, fit the map to that segment
+            if let idx = activeHealthSegmentIndex, idx >= 0, idx < healthOverlays.count {
+                let target = healthOverlays[idx].polyline
+                uiView.setVisibleMapRect(
+                    target.boundingMapRect,
+                    edgePadding: UIEdgeInsets(top: 80, left: 80, bottom: 120, right: 80),
+                    animated: true
+                )
+            }
+        }
     }
     
     private func addCarWalkRouteToMap(_ mapView: MKMapView, route: CarWalkRouteResponse) {
@@ -118,7 +134,6 @@ struct EnhancedMapViewContainer: UIViewRepresentable {
                 mapView.addAnnotation(endAnnotation)
             }
             
-            // Create polyline for this segment
             let coordinates = [startCoord, endCoord]
             let polyline = ColoredPolyline(coordinates: coordinates, count: coordinates.count)
             polyline.transportMode = step.transportType
@@ -127,7 +142,6 @@ struct EnhancedMapViewContainer: UIViewRepresentable {
             mapView.addOverlay(polyline)
             allCoordinates.append(contentsOf: coordinates)
             
-            // Add intermediate point annotation (transition point)
             if index < route.steps.count - 1 {
                 let transitionAnnotation = MKPointAnnotation()
                 transitionAnnotation.coordinate = endCoord
@@ -148,6 +162,48 @@ struct EnhancedMapViewContainer: UIViewRepresentable {
         }
     }
     
+    private func addHealthRouteToMap(_ mapView: MKMapView, overlays: [HealthSegmentOverlay]) {
+        var unionRect = MKMapRect.null
+        var startCoord: CLLocationCoordinate2D?
+        var endCoord: CLLocationCoordinate2D?
+
+        for (idx, overlay) in overlays.enumerated() {
+            let colored = HealthColoredPolyline(points: overlay.polyline.points(), count: overlay.polyline.pointCount)
+            colored.transport = overlay.mode
+            colored.stepIndex = idx
+            mapView.addOverlay(colored)
+
+            unionRect = unionRect.isNull ? colored.boundingMapRect : unionRect.union(colored.boundingMapRect)
+
+            let coords = overlay.polyline.coordinates
+            if let first = coords.first, startCoord == nil { startCoord = first }
+            if let last = coords.last { endCoord = last }
+        }
+
+        if let start = startCoord {
+            let startAnnotation = MKPointAnnotation()
+            startAnnotation.coordinate = start
+            startAnnotation.title = "Start"
+            startAnnotation.subtitle = "Trip begins here"
+            mapView.addAnnotation(startAnnotation)
+        }
+        if let end = endCoord {
+            let endAnnotation = MKPointAnnotation()
+            endAnnotation.coordinate = end
+            endAnnotation.title = "Destination"
+            endAnnotation.subtitle = "Trip ends here"
+            mapView.addAnnotation(endAnnotation)
+        }
+
+        if !unionRect.isNull {
+            mapView.setVisibleMapRect(
+                unionRect,
+                edgePadding: UIEdgeInsets(top: 80, left: 80, bottom: 80, right: 80),
+                animated: true
+            )
+        }
+    }
+
     private func getTransitionTitle(from: CarWalkTransportMode, to: CarWalkTransportMode) -> String {
         switch (from, to) {
         case (.car, .walk):
@@ -174,15 +230,32 @@ struct EnhancedMapViewContainer: UIViewRepresentable {
                 renderer.lineCap = .round
                 renderer.lineJoin = .round
                 
-                // Add visual distinction between segments
                 if coloredPolyline.transportMode == .walk {
-                    renderer.lineDashPattern = [8, 4] // Dashed line for walking
+                    renderer.lineDashPattern = [8, 4]
                 }
                 
                 return renderer
             }
+
+            if let healthPolyline = overlay as? HealthColoredPolyline {
+                let renderer = MKPolylineRenderer(polyline: healthPolyline)
+                let isActive = (parent.activeHealthSegmentIndex != nil) && (healthPolyline.stepIndex == parent.activeHealthSegmentIndex)
+                let baseColor = UIColor(healthPolyline.transport.color)
+                renderer.strokeColor = isActive ? baseColor : baseColor.withAlphaComponent(0.3)
+                renderer.lineWidth = isActive ? 8 : 4
+                renderer.lineCap = .round
+                renderer.lineJoin = .round
+                switch healthPolyline.transport {
+                case .walking, .biking:
+                    renderer.lineDashPattern = [8, 4]
+                case .transit:
+                    renderer.lineDashPattern = [2, 4]
+                case .driving:
+                    break
+                }
+                return renderer
+            }
             
-            // Fallback for regular polylines
             if let polyline = overlay as? MKPolyline {
                 let renderer = MKPolylineRenderer(polyline: polyline)
                 renderer.strokeColor = .systemBlue
@@ -206,7 +279,6 @@ struct EnhancedMapViewContainer: UIViewRepresentable {
                 annotationView?.annotation = annotation
             }
             
-            // Customize annotation based on title
             if let markerView = annotationView as? MKMarkerAnnotationView {
                 switch annotation.title {
                 case "Start":
@@ -229,11 +301,34 @@ struct EnhancedMapViewContainer: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
             print("Selected annotation: \(view.annotation?.title ?? "Unknown")")
         }
+
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            DispatchQueue.main.async {
+                self.parent.locationManager.region = mapView.region
+            }
+        }
     }
 }
 
-// MARK: - Colored Polyline for Multi-Modal Routes
 class ColoredPolyline: MKPolyline {
     var transportMode: CarWalkTransportMode = .walk
     var stepIndex: Int = 0
+}
+
+struct HealthSegmentOverlay {
+    let polyline: MKPolyline
+    let mode: HealthTransportType
+}
+
+class HealthColoredPolyline: MKPolyline {
+    var transport: HealthTransportType = .walking
+    var stepIndex: Int = 0
+}
+
+private extension MKPolyline {
+    var coordinates: [CLLocationCoordinate2D] {
+        var coords = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: self.pointCount)
+        self.getCoordinates(&coords, range: NSRange(location: 0, length: self.pointCount))
+        return coords
+    }
 }

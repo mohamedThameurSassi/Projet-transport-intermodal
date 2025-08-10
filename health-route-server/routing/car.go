@@ -27,6 +27,7 @@ type RouteStep struct {
 	DistanceM   float64
 	Description string
 	Error       string
+	Polyline    string `json:"polyline,omitempty"`
 }
 
 func toRadians(degrees float64) float64 {
@@ -441,10 +442,10 @@ func PlanCarPlusLastWalk(
 	walkDurationSec := walkDurationMinutes * 60
 
 	log.Printf("Step 1: Finding nearest nodes...")
-	endWalkNode, endWalkDist := findNearestNode(endCoord, walkGraph)
-	carStartNode, carStartDist := findNearestNode(startCoord, carGraph)
-	log.Printf("Nearest walk node to destination: %d (%.2fm away)", endWalkNode, endWalkDist)
-	log.Printf("Nearest car node to start: %d (%.2fm away)", carStartNode, carStartDist)
+	endWalkNode, _ := findNearestNode(endCoord, walkGraph)
+	carStartNode, _ := findNearestNode(startCoord, carGraph)
+	log.Printf("Nearest walk node to destination: %d", endWalkNode)
+	log.Printf("Nearest car node to start: %d", carStartNode)
 
 	log.Printf("Step 2: Finding walkable nodes within %.0f seconds...", walkDurationSec)
 	walkCandidates := findNodesWithinWalkingTime(walkGraph, endWalkNode, walkDurationSec)

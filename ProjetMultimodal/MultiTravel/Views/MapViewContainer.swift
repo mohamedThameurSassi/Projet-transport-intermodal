@@ -134,5 +134,12 @@ struct MapViewContainer: UIViewRepresentable {
                 // You could trigger navigation here or show more details
             }
         }
+
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            // Update shared region so search completer stays relevant
+            DispatchQueue.main.async {
+                self.parent.locationManager.region = mapView.region
+            }
+        }
     }
 }

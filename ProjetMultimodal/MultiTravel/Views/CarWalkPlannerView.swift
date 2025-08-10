@@ -5,29 +5,29 @@ struct CarWalkPlannerView: View {
     let destination: MKMapItem
     let locationManager: LocationManager
     let onRouteCalculated: (CarWalkRouteResponse) -> Void
-    
+
     @StateObject private var carWalkService = CarWalkRoutingService()
     @Environment(\.presentationMode) var presentationMode
     @State private var walkDurationMinutes: Double = 20
     @State private var showingRouteDetails = false
-    
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 headerView
-                
+
                 if !showingRouteDetails {
                     planningView
                 } else {
                     routeDetailsView
                 }
-                
+
                 Spacer()
             }
             .background(Color(.systemGroupedBackground))
         }
     }
-    
+
     private var headerView: some View {
         HStack {
             Button("Cancel") {
@@ -35,21 +35,21 @@ struct CarWalkPlannerView: View {
             }
             .font(.system(size: 16, weight: .medium))
             .foregroundColor(.blue)
-            
+
             Spacer()
-            
+
             VStack(spacing: 2) {
                 Text("Car + Walk Route")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(.primary)
-                
+
                 Text("Drive, then walk to destination")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
-            
+
             Spacer()
-            
+
             Button("") { }
                 .opacity(0)
         }
@@ -60,14 +60,14 @@ struct CarWalkPlannerView: View {
                 .shadow(color: .black.opacity(0.05), radius: 1, x: 0, y: 1)
         )
     }
-    
+
     private var planningView: some View {
         ScrollView {
             VStack(spacing: 24) {
                 destinationInfoCard
                 walkingDurationCard
                 planRouteButton
-                
+
                 if let error = carWalkService.error {
                     errorCard(error: error)
                 }
@@ -76,23 +76,23 @@ struct CarWalkPlannerView: View {
             .padding(.top, 20)
         }
     }
-    
+
     private var destinationInfoCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Image(systemName: "location.fill")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundColor(.blue)
-                
+
                 Text("Destination")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(.secondary)
             }
-            
+
             Text(destination.name ?? "Unknown Place")
                 .font(.system(size: 20, weight: .bold))
                 .foregroundColor(.primary)
-            
+
             if let address = destination.placemark.title {
                 Text(address)
                     .font(.system(size: 14))
@@ -108,39 +108,39 @@ struct CarWalkPlannerView: View {
                 .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
         )
     }
-    
+
     private var walkingDurationCard: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Image(systemName: "figure.walk")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundColor(.green)
-                
+
                 Text("Walking Duration")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.primary)
             }
-            
+
             Text("How long are you willing to walk from the parking spot?")
                 .font(.system(size: 14))
                 .foregroundColor(.secondary)
-            
+
             VStack(spacing: 12) {
                 HStack {
-                    Text("\\(Int(walkDurationMinutes)) minutes")
+                    Text("\(Int(walkDurationMinutes)) minutes")
                         .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.green)
-                    
+
                     Spacer()
-                    
-                    Text("~\\(String(format: \"%.1f\", walkDurationMinutes * 1.4 * 60 / 1000)) km")
+
+                    Text("~\(String(format: "%.1f", walkDurationMinutes * 1.4 * 60 / 1000)) km")
                         .font(.system(size: 14))
                         .foregroundColor(.secondary)
                 }
-                
+
                 Slider(value: $walkDurationMinutes, in: 5...30, step: 5)
                     .accentColor(.green)
-                
+
                 HStack {
                     Text("5 min")
                         .font(.system(size: 12))
@@ -159,7 +159,7 @@ struct CarWalkPlannerView: View {
                 .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
         )
     }
-    
+
     private var planRouteButton: some View {
         Button(action: planRoute) {
             HStack(spacing: 12) {
@@ -170,7 +170,7 @@ struct CarWalkPlannerView: View {
                 } else {
                     Image(systemName: "car.fill")
                         .font(.system(size: 16, weight: .medium))
-                    
+
                     Text("Plan Car + Walk Route")
                         .font(.system(size: 18, weight: .semibold))
                 }
@@ -203,7 +203,7 @@ struct CarWalkPlannerView: View {
         .scaleEffect(carWalkService.isLoading ? 0.98 : 1.0)
         .animation(.easeInOut(duration: 0.1), value: carWalkService.isLoading)
     }
-    
+
     private var routeDetailsView: some View {
         ScrollView {
             VStack(spacing: 20) {
@@ -217,25 +217,25 @@ struct CarWalkPlannerView: View {
             .padding(.top, 20)
         }
     }
-    
+
     private func routeSummaryCard(response: CarWalkRouteResponse) -> some View {
         VStack(spacing: 16) {
             Text("Route Summary")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundColor(.primary)
-            
+
             HStack(spacing: 20) {
                 VStack {
-                    Text("\\(formatTime(response.totalDurationSec))")
+                    Text("\(formatTime(response.totalDurationSec))")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundColor(.primary)
                     Text("Total Time")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 }
-                
+
                 VStack {
-                    Text("\\(formatDistance(response.totalDistanceM))")
+                    Text("\(formatDistance(response.totalDistanceM))")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundColor(.primary)
                     Text("Total Distance")
@@ -243,28 +243,55 @@ struct CarWalkPlannerView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            
+
             HStack(spacing: 20) {
                 VStack {
                     HStack {
                         Image(systemName: "car.fill")
                             .foregroundColor(.blue)
-                        Text("\\(formatTime(response.carDurationSec))")
+                        Text("\(formatTime(response.carDurationSec))")
                             .font(.system(size: 16, weight: .semibold))
                     }
-                    Text("\\(formatDistance(response.carDistanceM))")
+                    Text("\(formatDistance(response.carDistanceM))")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 }
-                
+
                 VStack {
                     HStack {
                         Image(systemName: "figure.walk")
                             .foregroundColor(.green)
-                        Text("\\(formatTime(response.walkDurationSec))")
+                        Text("\(formatTime(response.walkDurationSec))")
                             .font(.system(size: 16, weight: .semibold))
                     }
-                    Text("\\(formatDistance(response.walkDistanceM))")
+                    Text("\(formatDistance(response.walkDistanceM))")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            // Health and emissions row
+            HStack(spacing: 20) {
+                VStack {
+                    HStack {
+                        Image(systemName: "flame.fill")
+                            .foregroundColor(.orange)
+                        Text("\(response.caloriesBurned ?? Int((response.walkDistanceM/1000.0)*50)) cal")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    Text("Calories Burned")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+
+                VStack {
+                    HStack {
+                        Image(systemName: "leaf.fill")
+                            .foregroundColor(.green)
+                        Text(String(format: "%.1f kg", response.carbonFootprintKg ?? (response.carDistanceM/1000.0*0.21)))
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    Text("CO₂ Emissions")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 }
@@ -277,44 +304,44 @@ struct CarWalkPlannerView: View {
                 .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
         )
     }
-    
+
     private func routeStepsCard(response: CarWalkRouteResponse) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Route Steps")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundColor(.primary)
-            
+
             ForEach(Array(response.steps.enumerated()), id: \.offset) { index, step in
                 HStack(spacing: 12) {
                     Image(systemName: step.transportType.icon)
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(Color(step.transportType.color))
                         .frame(width: 24)
-                    
+
                     VStack(alignment: .leading, spacing: 4) {
                         Text(step.description)
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.primary)
-                        
+
                         HStack {
-                            Text("\\(formatTime(step.durationSec))")
+                            Text("\(formatTime(step.durationSec))")
                                 .font(.system(size: 12))
                                 .foregroundColor(.secondary)
-                            
+
                             Text("•")
                                 .font(.system(size: 12))
                                 .foregroundColor(.secondary)
-                            
-                            Text("\\(formatDistance(step.distanceM))")
+
+                            Text("\(formatDistance(step.distanceM))")
                                 .font(.system(size: 12))
                                 .foregroundColor(.secondary)
                         }
                     }
-                    
+
                     Spacer()
                 }
                 .padding(.vertical, 8)
-                
+
                 if index < response.steps.count - 1 {
                     Divider()
                 }
@@ -327,7 +354,7 @@ struct CarWalkPlannerView: View {
                 .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
         )
     }
-    
+
     private func useRouteButton(response: CarWalkRouteResponse) -> some View {
         Button(action: {
             onRouteCalculated(response)
@@ -336,7 +363,7 @@ struct CarWalkPlannerView: View {
             HStack(spacing: 12) {
                 Image(systemName: "map.fill")
                     .font(.system(size: 16, weight: .medium))
-                
+
                 Text("Use This Route")
                     .font(.system(size: 18, weight: .semibold))
             }
@@ -356,17 +383,17 @@ struct CarWalkPlannerView: View {
             .shadow(color: .green.opacity(0.3), radius: 8, x: 0, y: 4)
         }
     }
-    
+
     private func errorCard(error: String) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 16))
                 .foregroundColor(.red)
-            
+
             Text(error)
                 .font(.system(size: 14))
                 .foregroundColor(.red)
-            
+
             Spacer()
         }
         .padding(16)
@@ -379,40 +406,40 @@ struct CarWalkPlannerView: View {
                 )
         )
     }
-    
+
     private func planRoute() {
         guard let userLocation = locationManager.lastLocation else {
             carWalkService.error = "Unable to get your current location"
             return
         }
-        
+
         Task {
             await carWalkService.requestCarWalkRoute(
                 origin: userLocation.coordinate,
                 destination: destination.placemark.coordinate,
                 walkDurationMinutes: walkDurationMinutes
             )
-            
+
             if carWalkService.error == nil && carWalkService.lastResponse != nil {
                 showingRouteDetails = true
             }
         }
     }
-    
+
     private func formatTime(_ seconds: Double) -> String {
         let minutes = Int(seconds / 60)
         if minutes < 60 {
-            return "\\(minutes) min"
+            return "\(minutes) min"
         } else {
             let hours = minutes / 60
             let remainingMinutes = minutes % 60
-            return "\\(hours)h \\(remainingMinutes)m"
+            return "\(hours)h \(remainingMinutes)m"
         }
     }
-    
+
     private func formatDistance(_ meters: Double) -> String {
         if meters < 1000 {
-            return "\\(Int(meters)) m"
+            return "\(Int(meters)) m"
         } else {
             let kilometers = meters / 1000
             return String(format: "%.1f km", kilometers)

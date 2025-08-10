@@ -97,6 +97,8 @@ struct CarWalkRouteResponse: Codable {
     let walkDurationSec: Double
     let carDistanceM: Double
     let carDurationSec: Double
+    let caloriesBurned: Int?
+    let carbonFootprintKg: Double?
     let error: String?
 }
 
@@ -168,8 +170,8 @@ enum CarWalkTransportMode: String, CaseIterable {
     
     var color: Color {
         switch self {
-        case .car: return .blue
-        case .walk: return .green
+    case .car: return .blue
+    case .walk: return .red
         }
     }
 }

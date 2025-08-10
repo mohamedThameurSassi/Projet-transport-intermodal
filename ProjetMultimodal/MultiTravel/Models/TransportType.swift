@@ -1,9 +1,9 @@
 import MapKit
+import SwiftUI
 
-// User's preferred transport types (what they usually use)
 enum PreferredTransportType: Int, CaseIterable, Hashable, Codable {
     case car = 0
-    case gtfs = 1  // Public transit (GTFS)
+    case gtfs = 1 
     
     var displayName: String {
         switch self {
@@ -33,6 +33,29 @@ enum HealthTransportType: String, CaseIterable, Hashable, Codable {
     case biking = "biking"
     case transit = "transit"
     case driving = "driving"
+
+    // Accept server synonyms during decode
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self).lowercased()
+        switch raw {
+        case "driving", "car": self = .driving
+        case "transit", "gtfs": self = .transit
+        case "walking", "walk", "walk_final", "walk_to_transit", "walk_from_transit": self = .walking
+        case "biking", "bike", "cycling": self = .biking
+        default:
+            if let v = HealthTransportType(rawValue: raw) {
+                self = v
+            } else {
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown transport type: \(raw)")
+            }
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(self.rawValue)
+    }
     
     var displayName: String {
         switch self {
@@ -62,7 +85,25 @@ enum HealthTransportType: String, CaseIterable, Hashable, Codable {
     }
 }
 
-// MARK: - Trip Request/Response Models for Go Server Communication
+extension HealthTransportType {
+    var color: Color {
+        switch self {
+        case .walking:
+            return .red
+        case .biking:
+            if #available(iOS 15.0, *) {
+                return .teal
+            } else {
+                return Color(.systemTeal)
+            }
+        case .transit:
+            return .purple
+        case .driving:
+            return .blue
+        }
+    }
+}
+
 
 struct TripRequest: Codable {
     let origin: LocationPoint
@@ -88,8 +129,8 @@ struct TripResponse: Codable {
         let totalDuration: TimeInterval
         let totalDistance: Double
         let estimatedCalories: Int
-        let healthScore: Int // 1-10 scale
-        let carbonFootprint: Double // kg CO2
+        let healthScore: Int
+        let carbonFootprint: Double 
         
         struct RouteSegment: Codable {
             let transportType: HealthTransportType

@@ -30,7 +30,6 @@ func LoadGoogleMapsConfig() (*GoogleMapsConfig, error) {
 	}, nil
 }
 
-// Google Maps API response structures
 type GoogleDirectionsResponse struct {
 	Routes       []GoogleRoute `json:"routes"`
 	Status       string        `json:"status"`
@@ -120,7 +119,6 @@ type GooglePolyline struct {
 	Points string `json:"points"`
 }
 
-// Main function to get transit directions from Google Maps
 func PlanTransitWithGoogle(
 	startCoord Coordinate,
 	endCoord Coordinate,
@@ -150,7 +148,6 @@ func PlanTransitWithGoogle(
 		params.Set("departure_time", "now")
 	}
 
-	// Optimize for less walking if specified
 	if maxWalkMinutes > 0 && maxWalkMinutes < 30 {
 		params.Set("transit_routing_preference", "less_walking")
 	}
@@ -183,7 +180,6 @@ func PlanTransitWithGoogle(
 		return nil, fmt.Errorf("no transit routes found")
 	}
 
-	// Use the best route (first one)
 	bestRoute := googleResp.Routes[0]
 	steps := convertGoogleRouteToSteps(bestRoute, startCoord, endCoord)
 
@@ -203,7 +199,6 @@ func convertGoogleRouteToSteps(route GoogleRoute, startCoord, endCoord Coordinat
 		}
 	}
 
-	// Ensure start and end coordinates match exactly
 	if len(steps) > 0 {
 		steps[0].FromCoord = startCoord
 		steps[len(steps)-1].ToCoord = endCoord
@@ -232,6 +227,7 @@ func convertGoogleStep(googleStep GoogleStep) *RouteStep {
 		instructions := stripHTMLTags(googleStep.Instructions)
 		step.Description = fmt.Sprintf("Walk %.1f km (%.0f min) - %s",
 			step.DistanceM/1000, step.DurationSec/60, instructions)
+		step.Polyline = ""
 
 	case "TRANSIT":
 		if googleStep.TransitDetails != nil {
@@ -257,7 +253,6 @@ func convertGoogleStep(googleStep GoogleStep) *RouteStep {
 				step.DurationSec/60,
 			)
 
-			// Set precise stop locations
 			step.FromCoord = Coordinate{
 				Lat: td.DepartureStop.Location.Lat,
 				Lon: td.DepartureStop.Location.Lng,
@@ -272,22 +267,25 @@ func convertGoogleStep(googleStep GoogleStep) *RouteStep {
 				step.DistanceM/1000, step.DurationSec/60)
 		}
 
+		step.Polyline = googleStep.Polyline.Points
+
 	case "DRIVING":
 		step.Mode = "car"
 		step.Description = fmt.Sprintf("Drive %.1f km (%.0f min)",
 			step.DistanceM/1000, step.DurationSec/60)
+		step.Polyline = googleStep.Polyline.Points
 
 	default:
 		step.Mode = strings.ToLower(googleStep.TravelMode)
 		step.Description = fmt.Sprintf("%s (%.1f km, %.0f min)",
 			googleStep.TravelMode, step.DistanceM/1000, step.DurationSec/60)
+		step.Polyline = googleStep.Polyline.Points
 	}
 
 	return step
 }
 
 func stripHTMLTags(html string) string {
-	// Simple HTML tag removal
 	result := html
 	result = strings.ReplaceAll(result, "<b>", "")
 	result = strings.ReplaceAll(result, "</b>", "")
@@ -297,7 +295,6 @@ func stripHTMLTags(html string) string {
 	return result
 }
 
-// Wrapper function for easier use
 func PlanTransitPlusWalk(
 	startCoord Coordinate,
 	endCoord Coordinate,
@@ -312,7 +309,7 @@ func PlanTransitPlusWalk(
 		startCoord,
 		endCoord,
 		config,
-		nil, // Use current time
+		nil,
 		maxWalkMinutes,
 	)
 
@@ -320,10 +317,8 @@ func PlanTransitPlusWalk(
 		return nil, err
 	}
 
-	// Tag walking steps appropriately
 	for i := range steps {
 		if steps[i].Mode == "walk" {
-			// Determine if this is walking to transit, from transit, or between transit
 			if i == 0 || (i > 0 && steps[i-1].Mode != "walk") {
 				if i < len(steps)-1 && steps[i+1].Mode == "transit" {
 					steps[i].Mode = "walk_to_transit"
@@ -336,7 +331,6 @@ func PlanTransitPlusWalk(
 		}
 	}
 
-	// Validate total walking time
 	totalWalkSec := 0.0
 	for _, step := range steps {
 		if step.Mode == "walk" || step.Mode == "walk_to_transit" || step.Mode == "walk_from_transit" {
@@ -350,7 +344,6 @@ func PlanTransitPlusWalk(
 	return steps, nil
 }
 
-// Function to get multiple transit alternatives
 func GetTransitAlternatives(
 	startCoord Coordinate,
 	endCoord Coordinate,
@@ -407,14 +400,6 @@ func GetTransitAlternatives(
 	return alternatives, nil
 }
 
-// PlanTransitEarlierStopPlusWalk attempts to alight earlier from the final transit segment to maximize healthy walking under a time cap.
-// Workflow:
-// 1) Get a baseline transit itinerary from Google (PlanTransitWithGoogle)
-// 2) Take the last transit step's arrival stop coords
-// 3) Match to nearest GTFS stop (preloaded index)
-// 4) In the same canonical trip pattern, enumerate earlier stops
-// 5) For each earlier stop, compute walking time (A*) to destination
-// 6) Pick the earliest (farthest upstream) stop whose walk time is the largest <= maxWalkMinutes; fallback to shortest walk if none fit
 func PlanTransitEarlierStopPlusWalk(
 	startCoord Coordinate,
 	endCoord Coordinate,
@@ -498,7 +483,6 @@ func PlanTransitEarlierStopPlusWalk(
 			if walkTime <= 0 || math.IsInf(walkTime, 1) {
 				continue
 			}
-			// Since no candidate was <= maxWalkSec, all walkTime > maxWalkSec; choose the one closest to the cap
 			diff := math.Abs(walkTime - maxWalkSec*60)
 			if diff < bestDiff {
 				candCopy := cand

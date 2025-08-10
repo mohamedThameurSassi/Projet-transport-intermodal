@@ -1,13 +1,15 @@
 import SwiftUI
 import MapKit
 
-struct PlaceInfoCard: View {
+struct PlaceInfoActionCard: View {
     let place: MKMapItem
     let onClose: () -> Void
     let onDirections: () -> Void
     let onCarWalkDirections: () -> Void
     let onFavoriteToggle: () -> Void
     let isFavorite: Bool
+    let onGo: () -> Void // New callback for quick start
+    let isStartingNavigation: Bool // Loading state
     
     var body: some View {
         VStack(spacing: 12) {
@@ -39,48 +41,58 @@ struct PlaceInfoCard: View {
             }
             
             VStack(spacing: 8) {
+                // Primary Go button (like Apple Maps)
+                Button(action: onGo) {
+                    HStack {
+                        if isStartingNavigation {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                                .tint(.white)
+                        } else {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 14, weight: .bold))
+                        }
+                        Text(isStartingNavigation ? "Starting..." : "Go")
+                            .font(.system(size: 16, weight: .bold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+                .disabled(isStartingNavigation)
+                
+                // Secondary options row
                 HStack(spacing: 8) {
                     Button(action: onDirections) {
                         HStack {
                             Image(systemName: "arrow.triangle.turn.up.right.diamond")
-                                .font(.system(size: 14, weight: .medium))
-                            Text("Directions")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.system(size: 12, weight: .medium))
+                            Text("Plan")
+                                .font(.system(size: 12, weight: .medium))
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
+                        .padding(.vertical, 10)
+                        .background(Color.gray.opacity(0.2))
+                        .foregroundColor(.primary)
+                        .cornerRadius(6)
                     }
                     
                     Button(action: onCarWalkDirections) {
                         HStack {
-                            Image(systemName: "car.fill")
-                                .font(.system(size: 12, weight: .medium))
-                            Text("+")
-                                .font(.system(size: 12, weight: .bold))
                             Image(systemName: "figure.walk")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("Park & Walk")
                                 .font(.system(size: 12, weight: .medium))
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(
-                            LinearGradient(
-                                gradient: Gradient(colors: [.green, .mint]),
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
+                        .padding(.vertical, 10)
+                        .background(Color.gray.opacity(0.2))
+                        .foregroundColor(.primary)
+                        .cornerRadius(6)
                     }
                 }
-                
-                Text("🚗 + 🚶 Get healthier route with parking and walking")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
             }
         }
         .padding()

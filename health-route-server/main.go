@@ -2,13 +2,10 @@ package main
 
 import (
 	"encoding/gob"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -59,39 +56,11 @@ type Graph struct {
 
 var (
 	carGraph  *Graph
-	bikeGraph *Graph
 	walkGraph *Graph
-	gtfsGraph *Graph
 
-	// Cached routing graphs (converted once)
 	routingCarGraph  *routing.Graph
 	routingWalkGraph *routing.Graph
 )
-
-type OSRMConfig struct {
-	CarURL  string
-	BikeURL string
-	WalkURL string
-	GTFSUrl string
-}
-
-var osrmConfig = OSRMConfig{
-	CarURL:  "http://localhost:5000",
-	BikeURL: "http://localhost:5001",
-	WalkURL: "http://localhost:5002",
-	GTFSUrl: "http://localhost:5003",
-}
-
-type OSRMRoute struct {
-	Distance float64 `json:"distance"`
-	Duration float64 `json:"duration"`
-	Geometry string  `json:"geometry"`
-}
-
-type OSRMResponse struct {
-	Routes []OSRMRoute `json:"routes"`
-	Code   string      `json:"code"`
-}
 
 type LocationPoint struct {
 	Latitude  float64 `json:"latitude"`
@@ -142,22 +111,12 @@ func loadGraphs() error {
 		return fmt.Errorf("failed to load car graph: %v", err)
 	}
 
-	bikeGraph, err = loadGraph(filepath.Join(dataDir, "bike_graph.gob"))
-	if err != nil {
-		return fmt.Errorf("failed to load bike graph: %v", err)
-	}
-
 	walkGraph, err = loadGraph(filepath.Join(dataDir, "walk_graph.gob"))
 	if err != nil {
 		return fmt.Errorf("failed to load walk graph: %v", err)
 	}
 
-	gtfsGraph, err = loadGraph(filepath.Join(dataDir, "gtfs_graph.gob"))
-	if err != nil {
-		return fmt.Errorf("failed to load gtfs graph: %v", err)
-	}
-
-	log.Println("Successfully loaded all pre-generated graphs")
+	log.Println("Successfully loaded custom graphs for car and walk routing")
 	return nil
 }
 
@@ -176,70 +135,6 @@ func loadGraph(filename string) (*Graph, error) {
 
 	log.Printf("Loaded graph from %s: %d nodes, %d edges", filename, len(graph.Nodes), len(graph.Edges))
 	return &graph, nil
-}
-
-func routeWithGraph(from, to LocationPoint, graph *Graph) (*OSRMRoute, error) {
-	if graph == nil {
-		return nil, fmt.Errorf("graph not loaded")
-	}
-
-	startNode, err := findNearestNode(from, graph)
-	if err != nil {
-		return nil, fmt.Errorf("could not find start node: %v", err)
-	}
-
-	endNode, err := findNearestNode(to, graph)
-	if err != nil {
-		return nil, fmt.Errorf("could not find end node: %v", err)
-	}
-
-	route, err := findShortestPath(startNode, endNode, graph)
-	if err != nil {
-		return nil, fmt.Errorf("could not find route: %v", err)
-	}
-
-	return route, nil
-}
-
-func findNearestNode(point LocationPoint, graph *Graph) (int64, error) {
-	var nearestNodeID int64
-	minDistance := math.Inf(1)
-
-	for nodeID, node := range graph.Nodes {
-		dist := calculateDistance(point, LocationPoint{Latitude: node.Latitude, Longitude: node.Longitude})
-		if dist < minDistance {
-			minDistance = dist
-			nearestNodeID = nodeID
-		}
-	}
-
-	if minDistance == math.Inf(1) {
-		return 0, fmt.Errorf("no nodes found in graph")
-	}
-
-	return nearestNodeID, nil
-}
-
-func findShortestPath(startID, endID int64, graph *Graph) (*OSRMRoute, error) {
-	if startID == endID {
-		return &OSRMRoute{Distance: 0, Duration: 0, Geometry: ""}, nil
-	}
-
-	startNode := graph.Nodes[startID]
-	endNode := graph.Nodes[endID]
-
-	distance := calculateDistance(
-		LocationPoint{Latitude: startNode.Latitude, Longitude: startNode.Longitude},
-		LocationPoint{Latitude: endNode.Latitude, Longitude: endNode.Longitude},
-	) * 1000
-
-	duration := distance / (30.0 / 3.6)
-
-	return &OSRMRoute{
-		Distance: distance,
-		Duration: duration,
-		Geometry: "",
-	}, nil
 }
 
 func (g *Graph) toRoutingGraph() *routing.Graph {
@@ -289,7 +184,6 @@ func handleCarWalkRoute(c *gin.Context) {
 		log.Printf("Using default walk duration: %.1f minutes", req.WalkDurationMins)
 	}
 
-	// Validate cached graphs
 	if routingCarGraph == nil || routingWalkGraph == nil {
 		log.Println("ERROR: Cached routing graphs not initialized")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "routing graphs not initialized"})
@@ -336,12 +230,25 @@ func handleTransitRoute(c *gin.Context) {
 		log.Printf("Using default walk duration: %.1f minutes", req.WalkDurationMins)
 	}
 
-	log.Println("Starting Google Maps transit route calculation...")
-	steps, err := routing.PlanTransitPlusWalk(
+	log.Println("Starting health-optimized transit route calculation...")
+
+	// Try the health-optimized version first (gets off transit earlier to walk more)
+	steps, err := routing.PlanTransitEarlierStopPlusWalk(
 		routing.Coordinate{Lat: req.StartLat, Lon: req.StartLon},
 		routing.Coordinate{Lat: req.EndLat, Lon: req.EndLon},
 		req.WalkDurationMins,
+		routingWalkGraph,
 	)
+
+	// If that fails, fall back to regular transit routing
+	if err != nil {
+		log.Printf("Health-optimized transit failed (%v), falling back to regular transit", err)
+		steps, err = routing.PlanTransitPlusWalk(
+			routing.Coordinate{Lat: req.StartLat, Lon: req.StartLon},
+			routing.Coordinate{Lat: req.EndLat, Lon: req.EndLon},
+			req.WalkDurationMins,
+		)
+	}
 
 	if err != nil {
 		log.Printf("ERROR: Transit routing failed: %v", err)
@@ -378,7 +285,8 @@ func main() {
 	log.Println("Converting graphs to routing format (one-time)...")
 	routingCarGraph = carGraph.toRoutingGraph()
 	routingWalkGraph = walkGraph.toRoutingGraph()
-	log.Printf("Cached routing graphs ready. Car nodes: %d, Walk nodes: %d", len(routingCarGraph.Nodes), len(routingWalkGraph.Nodes))
+	log.Printf("Cached routing graphs ready. Car nodes: %d, Walk nodes: %d",
+		len(routingCarGraph.Nodes), len(routingWalkGraph.Nodes))
 
 	// Load GTFS preprocessing once
 	if _, err := preprocessing.LoadGTFSIndexOnce("data"); err != nil { // assuming GTFS txt files in data/
@@ -413,108 +321,6 @@ func main() {
 	}
 }
 
-func getOSRMRoute(from, to LocationPoint, transportType string) (*OSRMRoute, error) {
-	var graph *Graph
-
-	switch transportType {
-	case "car", "driving":
-		graph = carGraph
-	case "bike", "biking":
-		graph = bikeGraph
-	case "walk", "walking":
-		graph = walkGraph
-	case "gtfs", "transit":
-		graph = gtfsGraph
-	}
-
-	if graph != nil {
-		log.Printf("Using pre-loaded graph for %s routing", transportType)
-		return routeWithGraph(from, to, graph)
-	}
-
-	log.Printf("Falling back to OSRM API for %s routing", transportType)
-
-	var baseURL string
-
-	switch transportType {
-	case "car", "driving":
-		baseURL = osrmConfig.CarURL
-	case "bike", "biking":
-		baseURL = osrmConfig.BikeURL
-	case "walk", "walking":
-		baseURL = osrmConfig.WalkURL
-	case "gtfs", "transit":
-		return getGTFSRoute(from, to)
-	default:
-		baseURL = osrmConfig.CarURL
-	}
-
-	coordinates := fmt.Sprintf("%.6f,%.6f;%.6f,%.6f",
-		from.Longitude, from.Latitude, to.Longitude, to.Latitude)
-
-	requestURL := fmt.Sprintf("%s/route/v1/driving/%s?overview=full&geometries=polyline",
-		baseURL, coordinates)
-
-	log.Printf("OSRM Request: %s", requestURL)
-
-	resp, err := http.Get(requestURL)
-	if err != nil {
-		return nil, fmt.Errorf("OSRM request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read OSRM response: %v", err)
-	}
-
-	var osrmResp OSRMResponse
-	if err := json.Unmarshal(body, &osrmResp); err != nil {
-		return nil, fmt.Errorf("failed to parse OSRM response: %v", err)
-	}
-
-	if osrmResp.Code != "Ok" || len(osrmResp.Routes) == 0 {
-		return nil, fmt.Errorf("OSRM returned no valid routes: %s", osrmResp.Code)
-	}
-
-	return &osrmResp.Routes[0], nil
-}
-
-func getGTFSRoute(from, to LocationPoint) (*OSRMRoute, error) {
-
-	params := url.Values{}
-	params.Set("from", fmt.Sprintf("%.6f,%.6f", from.Latitude, from.Longitude))
-	params.Set("to", fmt.Sprintf("%.6f,%.6f", to.Latitude, to.Longitude))
-	params.Set("time", time.Now().Format("15:04"))
-	params.Set("date", time.Now().Format("2006-01-02"))
-
-	requestURL := fmt.Sprintf("%s/plan?%s", osrmConfig.GTFSUrl, params.Encode())
-
-	log.Printf("GTFS Request: %s", requestURL)
-
-	resp, err := http.Get(requestURL)
-	if err != nil {
-		return nil, fmt.Errorf("GTFS request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read GTFS response: %v", err)
-	}
-
-	log.Printf("GTFS Response: %s", string(body))
-
-	distance := calculateDistance(from, to) * 1000
-	duration := distance / (30.0 / 3.6)
-
-	return &OSRMRoute{
-		Distance: distance,
-		Duration: duration,
-		Geometry: "",
-	}, nil
-}
-
 func handleHealthRoute(c *gin.Context) {
 	var req TripRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -527,23 +333,15 @@ func handleHealthRoute(c *gin.Context) {
 		req.Destination.Latitude, req.Destination.Longitude,
 		req.PreferredTransport)
 
-	originalRoute, err := generateOriginalRouteOSRM(req)
-	if err != nil {
-		log.Printf("Error generating original route: %v", err)
-		distance := calculateDistance(req.Origin, req.Destination)
-		original := generateOriginalRoute(req, distance)
-		originalRoute = &original
-	}
+	// Generate original route using our custom algorithms
+	distance := calculateDistance(req.Origin, req.Destination)
+	originalRoute := generateOriginalRoute(req, distance)
 
-	healthAlternatives, err := generateHealthAlternativesOSRM(req)
-	if err != nil {
-		log.Printf("Error generating health alternatives: %v", err)
-		distance := calculateDistance(req.Origin, req.Destination)
-		healthAlternatives = generateHealthAlternatives(req, distance)
-	}
+	// Generate health alternatives using our custom algorithms
+	healthAlternatives := generateHealthAlternatives(req, distance)
 
 	response := TripResponse{
-		OriginalRoute:      *originalRoute,
+		OriginalRoute:      originalRoute,
 		HealthAlternatives: healthAlternatives,
 		RequestID:          fmt.Sprintf("trip_%d", time.Now().Unix()),
 	}
@@ -551,274 +349,7 @@ func handleHealthRoute(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-func generateOriginalRouteOSRM(req TripRequest) (*RouteOption, error) {
-	transportType := req.PreferredTransport
-	if transportType == "gtfs" {
-		transportType = "transit"
-	}
-
-	osrmRoute, err := getOSRMRoute(req.Origin, req.Destination, req.PreferredTransport)
-	if err != nil {
-		return nil, err
-	}
-
-	calories := 0
-	healthScore := 1
-	carbonFootprint := 0.0
-
-	switch req.PreferredTransport {
-	case "car":
-		calories = 0
-		healthScore = 1
-		carbonFootprint = (osrmRoute.Distance / 1000) * 0.21 // kg CO2 per km
-	case "gtfs":
-		calories = int((osrmRoute.Distance / 1000) * 5) // Small amount from walking to/from stops
-		healthScore = 3
-		carbonFootprint = (osrmRoute.Distance / 1000) * 0.05 // kg CO2 per km
-	}
-
-	return &RouteOption{
-		ID: "original",
-		Segments: []RouteSegment{
-			{
-				TransportType: transportType,
-				Duration:      osrmRoute.Duration,
-				Distance:      osrmRoute.Distance,
-				Instructions:  fmt.Sprintf("Take %s to destination", transportType),
-				StartLocation: req.Origin,
-				EndLocation:   req.Destination,
-				Polyline:      &osrmRoute.Geometry,
-			},
-		},
-		TotalDuration:     osrmRoute.Duration,
-		TotalDistance:     osrmRoute.Distance,
-		EstimatedCalories: calories,
-		HealthScore:       healthScore,
-		CarbonFootprint:   carbonFootprint,
-	}, nil
-}
-
-func generateHealthAlternativesOSRM(req TripRequest) ([]RouteOption, error) {
-	alternatives := []RouteOption{}
-
-	if req.PreferredTransport == "car" {
-		driveWalkRoute, err := generateDriveWalkAlternative(req)
-		if err == nil {
-			alternatives = append(alternatives, *driveWalkRoute)
-		} else {
-			log.Printf("Failed to generate drive+walk alternative: %v", err)
-		}
-	}
-
-	if req.PreferredTransport == "gtfs" {
-		transitWalkRoute, err := generateTransitWalkAlternative(req)
-		if err == nil {
-			alternatives = append(alternatives, *transitWalkRoute)
-		} else {
-			log.Printf("Failed to generate transit+walk alternative: %v", err)
-		}
-	}
-
-	distanceKm := calculateDistance(req.Origin, req.Destination)
-	if distanceKm < 10.0 {
-		bikeRoute, err := generateBikeAlternative(req)
-		if err == nil {
-			alternatives = append(alternatives, *bikeRoute)
-		} else {
-			log.Printf("Failed to generate bike alternative: %v", err)
-		}
-	}
-
-	if distanceKm < 5.0 {
-		walkRoute, err := generateWalkAlternative(req)
-		if err == nil {
-			alternatives = append(alternatives, *walkRoute)
-		} else {
-			log.Printf("Failed to generate walk alternative: %v", err)
-		}
-	}
-
-	return alternatives, nil
-}
-
-func generateDriveWalkAlternative(req TripRequest) (*RouteOption, error) {
-	walkingMinutes := 25.0
-	walkingSpeed := 5.0 / 3.6                             // 5 km/h in m/s
-	walkingDistance := walkingMinutes * 60 * walkingSpeed // meters
-
-	totalDistance := calculateDistance(req.Origin, req.Destination) * 1000 // meters
-	ratio := (totalDistance - walkingDistance) / totalDistance
-
-	parkingPoint := LocationPoint{
-		Latitude:  req.Origin.Latitude + (req.Destination.Latitude-req.Origin.Latitude)*ratio,
-		Longitude: req.Origin.Longitude + (req.Destination.Longitude-req.Origin.Longitude)*ratio,
-	}
-
-	// Get driving route to parking point
-	driveRoute, err := getOSRMRoute(req.Origin, parkingPoint, "car")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get drive route: %v", err)
-	}
-
-	// Get walking route from parking point to destination
-	walkRoute, err := getOSRMRoute(parkingPoint, req.Destination, "walking")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get walk route: %v", err)
-	}
-
-	// Calculate health metrics
-	walkingCalories := int((walkRoute.Distance / 1000) * 50) // 50 cal/km
-	drivingCarbon := (driveRoute.Distance / 1000) * 0.21     // kg CO2/km
-
-	return &RouteOption{
-		ID: "drive_and_walk",
-		Segments: []RouteSegment{
-			{
-				TransportType: "driving",
-				Duration:      driveRoute.Duration,
-				Distance:      driveRoute.Distance,
-				Instructions:  fmt.Sprintf("Drive %.1f km to parking area", driveRoute.Distance/1000),
-				StartLocation: req.Origin,
-				EndLocation:   parkingPoint,
-				Polyline:      &driveRoute.Geometry,
-			},
-			{
-				TransportType: "walking",
-				Duration:      walkRoute.Duration,
-				Distance:      walkRoute.Distance,
-				Instructions: fmt.Sprintf("Walk %.1f km (%.0f minutes) to destination",
-					walkRoute.Distance/1000, walkRoute.Duration/60),
-				StartLocation: parkingPoint,
-				EndLocation:   req.Destination,
-				Polyline:      &walkRoute.Geometry,
-			},
-		},
-		TotalDuration:     driveRoute.Duration + walkRoute.Duration,
-		TotalDistance:     driveRoute.Distance + walkRoute.Distance,
-		EstimatedCalories: walkingCalories,
-		HealthScore:       6, // Better than pure driving
-		CarbonFootprint:   drivingCarbon,
-	}, nil
-}
-
-// Generate Transit + Walk alternative
-func generateTransitWalkAlternative(req TripRequest) (*RouteOption, error) {
-	// Similar logic to drive+walk but with transit
-	walkingMinutes := 20.0
-	walkingSpeed := 5.0 / 3.6 // m/s
-	walkingDistance := walkingMinutes * 60 * walkingSpeed
-
-	totalDistance := calculateDistance(req.Origin, req.Destination) * 1000
-	ratio := (totalDistance - walkingDistance) / totalDistance
-
-	transitEndPoint := LocationPoint{
-		Latitude:  req.Origin.Latitude + (req.Destination.Latitude-req.Origin.Latitude)*ratio,
-		Longitude: req.Origin.Longitude + (req.Destination.Longitude-req.Origin.Longitude)*ratio,
-	}
-
-	transitRoute, err := getOSRMRoute(req.Origin, transitEndPoint, "gtfs")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get transit route: %v", err)
-	}
-
-	walkRoute, err := getOSRMRoute(transitEndPoint, req.Destination, "walking")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get walk route: %v", err)
-	}
-
-	walkingCalories := int((walkRoute.Distance / 1000) * 50)
-	transitCarbon := (transitRoute.Distance / 1000) * 0.05
-
-	return &RouteOption{
-		ID: "transit_and_walk",
-		Segments: []RouteSegment{
-			{
-				TransportType: "transit",
-				Duration:      transitRoute.Duration,
-				Distance:      transitRoute.Distance,
-				Instructions:  fmt.Sprintf("Take public transit %.1f km", transitRoute.Distance/1000),
-				StartLocation: req.Origin,
-				EndLocation:   transitEndPoint,
-				Polyline:      &transitRoute.Geometry,
-			},
-			{
-				TransportType: "walking",
-				Duration:      walkRoute.Duration,
-				Distance:      walkRoute.Distance,
-				Instructions: fmt.Sprintf("Walk %.1f km (%.0f minutes) to destination",
-					walkRoute.Distance/1000, walkRoute.Duration/60),
-				StartLocation: transitEndPoint,
-				EndLocation:   req.Destination,
-				Polyline:      &walkRoute.Geometry,
-			},
-		},
-		TotalDuration:     transitRoute.Duration + walkRoute.Duration,
-		TotalDistance:     transitRoute.Distance + walkRoute.Distance,
-		EstimatedCalories: walkingCalories,
-		HealthScore:       7,
-		CarbonFootprint:   transitCarbon,
-	}, nil
-}
-
-// Generate pure biking alternative
-func generateBikeAlternative(req TripRequest) (*RouteOption, error) {
-	bikeRoute, err := getOSRMRoute(req.Origin, req.Destination, "biking")
-	if err != nil {
-		return nil, err
-	}
-
-	bikingCalories := int((bikeRoute.Distance / 1000) * 40) // 40 cal/km
-
-	return &RouteOption{
-		ID: "biking",
-		Segments: []RouteSegment{
-			{
-				TransportType: "biking",
-				Duration:      bikeRoute.Duration,
-				Distance:      bikeRoute.Distance,
-				Instructions:  fmt.Sprintf("Bike %.1f km to destination", bikeRoute.Distance/1000),
-				StartLocation: req.Origin,
-				EndLocation:   req.Destination,
-				Polyline:      &bikeRoute.Geometry,
-			},
-		},
-		TotalDuration:     bikeRoute.Duration,
-		TotalDistance:     bikeRoute.Distance,
-		EstimatedCalories: bikingCalories,
-		HealthScore:       9,
-		CarbonFootprint:   0,
-	}, nil
-}
-
-// Generate pure walking alternative
-func generateWalkAlternative(req TripRequest) (*RouteOption, error) {
-	walkRoute, err := getOSRMRoute(req.Origin, req.Destination, "walking")
-	if err != nil {
-		return nil, err
-	}
-
-	walkingCalories := int((walkRoute.Distance / 1000) * 50) // 50 cal/km
-
-	return &RouteOption{
-		ID: "walking",
-		Segments: []RouteSegment{
-			{
-				TransportType: "walking",
-				Duration:      walkRoute.Duration,
-				Distance:      walkRoute.Distance,
-				Instructions:  fmt.Sprintf("Walk %.1f km to destination", walkRoute.Distance/1000),
-				StartLocation: req.Origin,
-				EndLocation:   req.Destination,
-				Polyline:      &walkRoute.Geometry,
-			},
-		},
-		TotalDuration:     walkRoute.Duration,
-		TotalDistance:     walkRoute.Distance,
-		EstimatedCalories: walkingCalories,
-		HealthScore:       8,
-		CarbonFootprint:   0,
-	}, nil
-}
+// (car-bike endpoint and handler removed during revert)
 
 func generateOriginalRoute(req TripRequest, distance float64) RouteOption {
 	var transportType string
@@ -837,7 +368,7 @@ func generateOriginalRoute(req TripRequest, distance float64) RouteOption {
 	case "gtfs":
 		transportType = "transit"
 		duration = distance / 30 * 3600   // Assume 30 km/h average for transit
-		calories = int(distance * 0.05)   // Small amount from walking to/from stops
+		calories = int(distance * 5)      // Small amount from walking to/from stops
 		carbonFootprint = distance * 0.05 // Much lower for public transit
 		healthScore = 3
 	default:
@@ -871,52 +402,103 @@ func generateOriginalRoute(req TripRequest, distance float64) RouteOption {
 func generateHealthAlternatives(req TripRequest, distance float64) []RouteOption {
 	alternatives := []RouteOption{}
 
-	// Alternative 1: Walking + Transit (if distance > 2km)
-	if distance > 2.0 {
+	// Alternative 1: Car + Walking (if original transport is car)
+	if req.PreferredTransport == "car" {
+		walkingDistance := 1.0 // 1km walking
+		carDistance := distance - walkingDistance
+
+		if carDistance > 0 {
+			walkingDuration := walkingDistance / 5 * 3600 // 5 km/h walking speed
+			carDuration := carDistance / 50 * 3600        // 50 km/h car speed
+			totalDuration := walkingDuration + carDuration
+			walkingCalories := int(walkingDistance * 50) // ~50 calories per km walking
+
+			// Calculate parking point
+			ratio := carDistance / distance
+			parkingPoint := LocationPoint{
+				Latitude:  req.Origin.Latitude + (req.Destination.Latitude-req.Origin.Latitude)*ratio,
+				Longitude: req.Origin.Longitude + (req.Destination.Longitude-req.Origin.Longitude)*ratio,
+			}
+
+			alternatives = append(alternatives, RouteOption{
+				ID: "car_and_walk",
+				Segments: []RouteSegment{
+					{
+						TransportType: "driving",
+						Duration:      carDuration,
+						Distance:      carDistance * 1000,
+						Instructions:  fmt.Sprintf("Drive %.1f km to parking area", carDistance),
+						StartLocation: req.Origin,
+						EndLocation:   parkingPoint,
+					},
+					{
+						TransportType: "walking",
+						Duration:      walkingDuration,
+						Distance:      walkingDistance * 1000,
+						Instructions: fmt.Sprintf("Walk %.1f km (%.0f minutes) to destination",
+							walkingDistance, walkingDuration/60),
+						StartLocation: parkingPoint,
+						EndLocation:   req.Destination,
+					},
+				},
+				TotalDuration:     totalDuration,
+				TotalDistance:     distance * 1000,
+				EstimatedCalories: walkingCalories,
+				HealthScore:       6,
+				CarbonFootprint:   carDistance * 0.21, // kg CO2 per km for driving portion
+			})
+		}
+	}
+
+	// Alternative 2: Transit + Walking (if original transport is gtfs)
+	if req.PreferredTransport == "gtfs" {
 		walkingDistance := 1.0 // 1km walking
 		transitDistance := distance - walkingDistance
 
-		walkingDuration := walkingDistance / 5 * 3600  // 5 km/h walking speed
-		transitDuration := transitDistance / 30 * 3600 // 30 km/h transit
+		if transitDistance > 0 {
+			walkingDuration := walkingDistance / 5 * 3600  // 5 km/h walking speed
+			transitDuration := transitDistance / 30 * 3600 // 30 km/h transit speed
+			totalDuration := walkingDuration + transitDuration
+			walkingCalories := int(walkingDistance * 50) // ~50 calories per km walking
 
-		totalDuration := walkingDuration + transitDuration
-		walkingCalories := int(walkingDistance * 50) // ~50 calories per km walking
+			// Calculate transit end point
+			ratio := transitDistance / distance
+			transitEndPoint := LocationPoint{
+				Latitude:  req.Origin.Latitude + (req.Destination.Latitude-req.Origin.Latitude)*ratio,
+				Longitude: req.Origin.Longitude + (req.Destination.Longitude-req.Origin.Longitude)*ratio,
+			}
 
-		alternatives = append(alternatives, RouteOption{
-			ID: "walking_transit",
-			Segments: []RouteSegment{
-				{
-					TransportType: "walking",
-					Duration:      walkingDuration,
-					Distance:      walkingDistance * 1000,
-					Instructions:  "Walk to transit stop",
-					StartLocation: req.Origin,
-					EndLocation: LocationPoint{
-						Latitude:  req.Origin.Latitude + 0.005,
-						Longitude: req.Origin.Longitude + 0.005,
+			alternatives = append(alternatives, RouteOption{
+				ID: "transit_and_walk",
+				Segments: []RouteSegment{
+					{
+						TransportType: "transit",
+						Duration:      transitDuration,
+						Distance:      transitDistance * 1000,
+						Instructions:  fmt.Sprintf("Take public transit %.1f km", transitDistance),
+						StartLocation: req.Origin,
+						EndLocation:   transitEndPoint,
+					},
+					{
+						TransportType: "walking",
+						Duration:      walkingDuration,
+						Distance:      walkingDistance * 1000,
+						Instructions: fmt.Sprintf("Walk %.1f km (%.0f minutes) to destination",
+							walkingDistance, walkingDuration/60),
+						StartLocation: transitEndPoint,
+						EndLocation:   req.Destination,
 					},
 				},
-				{
-					TransportType: "transit",
-					Duration:      transitDuration,
-					Distance:      transitDistance * 1000,
-					Instructions:  "Take public transit",
-					StartLocation: LocationPoint{
-						Latitude:  req.Origin.Latitude + 0.005,
-						Longitude: req.Origin.Longitude + 0.005,
-					},
-					EndLocation: req.Destination,
-				},
-			},
-			TotalDuration:     totalDuration,
-			TotalDistance:     distance * 1000,
-			EstimatedCalories: walkingCalories,
-			HealthScore:       7,
-			CarbonFootprint:   transitDistance * 0.05,
-		})
+				TotalDuration:     totalDuration,
+				TotalDistance:     distance * 1000,
+				EstimatedCalories: walkingCalories,
+				HealthScore:       7,
+				CarbonFootprint:   transitDistance * 0.05, // kg CO2 per km for transit portion
+			})
+		}
 	}
 
-	// Alternative 2: Biking (if distance < 10km)
+	// Alternative 3: Biking (if distance < 10km)
 	if distance < 10.0 {
 		bikingDuration := distance / 15 * 3600 // 15 km/h biking speed
 		bikingCalories := int(distance * 40)   // ~40 calories per km biking
@@ -928,7 +510,7 @@ func generateHealthAlternatives(req TripRequest, distance float64) []RouteOption
 					TransportType: "biking",
 					Duration:      bikingDuration,
 					Distance:      distance * 1000,
-					Instructions:  "Bike to destination",
+					Instructions:  fmt.Sprintf("Bike %.1f km to destination", distance),
 					StartLocation: req.Origin,
 					EndLocation:   req.Destination,
 				},
@@ -941,7 +523,7 @@ func generateHealthAlternatives(req TripRequest, distance float64) []RouteOption
 		})
 	}
 
-	// Alternative 3: Walking (if distance < 5km)
+	// Alternative 4: Walking (if distance < 5km)
 	if distance < 5.0 {
 		walkingDuration := distance / 5 * 3600 // 5 km/h walking speed
 		walkingCalories := int(distance * 50)  // ~50 calories per km walking
@@ -953,7 +535,7 @@ func generateHealthAlternatives(req TripRequest, distance float64) []RouteOption
 					TransportType: "walking",
 					Duration:      walkingDuration,
 					Distance:      distance * 1000,
-					Instructions:  "Walk to destination",
+					Instructions:  fmt.Sprintf("Walk %.1f km to destination", distance),
 					StartLocation: req.Origin,
 					EndLocation:   req.Destination,
 				},
