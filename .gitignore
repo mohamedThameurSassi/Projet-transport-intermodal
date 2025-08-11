@@ -228,3 +228,5 @@ health-route-server/preprocessing/walk_with_gtfs.json
 health-route-server/preprocessing/car_graph.pkl.gz
 health-route-server/preprocessing/bike_graph.pkl.gz
 health-route-server/preprocessing/bike_bixi_graph.pkl.gz
+health-route-server/presentation_notes.txt
+health-route-server/demo.html

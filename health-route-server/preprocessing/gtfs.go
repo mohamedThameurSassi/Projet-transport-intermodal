@@ -260,7 +260,7 @@ func headerIndex(hdr []string) map[string]int {
 
 func LoadGTFSIndexOnce(dir string) (*GTFSIndex, error) {
 	if gtfsIndex != nil {
-		return gtfsIndex, nil // already loaded
+		return gtfsIndex, nil
 	}
 	idx, err := LoadGTFS(dir)
 	if err != nil {

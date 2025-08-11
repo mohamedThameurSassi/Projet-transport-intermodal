@@ -72,7 +72,10 @@ func findNodesWithinTime(graph *Graph, startNode int64, maxTime float64, default
 	distances := make(map[int64]float64)
 	visited := make(map[int64]bool)
 
-	maxIterations := 5000
+	// Increase iteration cap to better handle larger time budgets and denser graphs.
+	// This function is a simplified Dijkstra without a heap; a higher cap avoids
+	// prematurely stopping when the frontier is large.
+	maxIterations := 100000
 	iterations := 0
 
 	distances[startNode] = 0
@@ -459,22 +462,28 @@ func PlanCarPlusLastWalk(
 		return steps
 	}
 
-	log.Printf("Step 3: Finding optimal walking start point...")
+	log.Printf("Step 3: Selecting walking start node to use as much of the time budget as possible...")
 	var walkStartNode int64
-	bestDistance := math.Inf(1)
+	bestTimeUsed := -1.0
+	bestTieDist := math.Inf(1)
 
-	for node := range walkCandidates {
+	// walkCandidates maps nodeID -> time from that node to endWalkNode (in seconds)
+	// Choose the node that maximizes timeUsed (i.e., farthest on foot within cap).
+	// Tie-break by smallest car-approach straight-line distance to origin.
+	for node, timeUsed := range walkCandidates {
 		nodeCoord := Coordinate{
 			Lat: walkGraph.Nodes[node].Latitude,
 			Lon: walkGraph.Nodes[node].Longitude,
 		}
-		dist := haversineDistance(startCoord, nodeCoord)
-		if dist < bestDistance {
-			bestDistance = dist
+		distToOrigin := haversineDistance(startCoord, nodeCoord)
+
+		if timeUsed > bestTimeUsed || (math.Abs(timeUsed-bestTimeUsed) < 1e-6 && distToOrigin < bestTieDist) {
+			bestTimeUsed = timeUsed
+			bestTieDist = distToOrigin
 			walkStartNode = node
 		}
 	}
-	log.Printf("Best walking start node: %d (%.2fm from origin)", walkStartNode, bestDistance)
+	log.Printf("Chosen walking start node: %d (uses %.0fs of %.0fs budget; tie dist to origin=%.2fm)", walkStartNode, bestTimeUsed, walkDurationSec, bestTieDist)
 
 	walkStartCoord := Coordinate{
 		Lat: walkGraph.Nodes[walkStartNode].Latitude,

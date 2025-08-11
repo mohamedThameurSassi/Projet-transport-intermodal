@@ -372,7 +372,7 @@ func main() {
 		len(routingCarGraph.Nodes), len(routingWalkGraph.Nodes))
 
 	// Load GTFS preprocessing once
-	if _, err := preprocessing.LoadGTFSIndexOnce("data"); err != nil { // assuming GTFS txt files in data/
+	if _, err := preprocessing.LoadGTFSIndexOnce("data"); err != nil {
 		log.Printf("Warning: failed to load GTFS index: %v", err)
 	} else {
 		log.Println("GTFS index loaded successfully at startup")
